@@ -1,0 +1,99 @@
+---
+title: "mixture_model_initial"
+author: "Kyu Min Shim"
+date: "2023-08-22"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# density visualization
+delta = 5
+alpha = 2
+theta = 0.2
+x = seq(-5, 10, 0.01)
+
+non_resp = dnorm(x)
+resp = dnorm(x, delta, alpha)
+plot(x, non_resp, col='red', type='l')
+lines(x, resp, col='blue', type='l')
+abline(v = 0, col='red', lty = 2)
+abline(v = delta, col='blue', lty = 2)
+mixed = (1-theta) * non_resp + theta * resp
+lines(x, mixed, col='purple', type='l')
+abline(v = delta * theta, col='purple', lty = 2)
+
+```
+```{r}
+# simulate sampling from mixture
+set.seed(2)
+n = 1000000
+p = runif(n)
+n_non_resp = sum(p > theta)
+n_resp = sum(p <= theta)
+s_control = rnorm(n)
+s_non_resp = rnorm(n_non_resp)
+s_resp = rnorm(n_resp, delta, alpha)
+s_mix = c(s_non_resp, s_resp)
+hist(s_control, xlim = c(-5, 10))
+hist(s_non_resp, xlim = c(-5, 10))
+hist(s_resp, xlim = c(-5, 10))
+hist(s_mix, xlim = c(-5, 10))
+```
+
+```{r}
+# moment calculations
+library(moments)
+control_m1 = moment(s_control, order = 1, central = FALSE)
+treat_m1 = moment(s_mix, order = 1, central = FALSE)
+control_m2 = moment(s_control, order = 2, central = FALSE)
+treat_m2 = moment(s_mix, order = 2, central = FALSE)
+control_m3 = moment(s_control, order = 3, central = FALSE)
+treat_m3 = moment(s_mix, order = 3, central = FALSE)
+
+# theoretical treatment moments given the true values for theta, delta, alpha
+treat_m1_est = (1-theta) * control_m1 + theta * 
+  (alpha * control_m1 + delta)
+treat_m2_est = (1-theta) * control_m2 + theta * 
+  (alpha^2 * control_m2 + 2 * alpha * delta * control_m1 + delta^2)
+treat_m3_est = (1-theta) * control_m3 + theta * 
+  (alpha^3 * control_m3 + 3 * alpha^2 * control_m2 * delta + 3 * alpha * control_m1 * delta^2 + delta^3)
+
+c(treat_m1, treat_m1_est, treat_m2, treat_m2_est, treat_m3, treat_m3_est)
+# values line up nicely, so if a numerical method can be used to 
+# estimate alpha, delta, theta as a unique solution, it should be very close 
+# to the true parameter values 
+```
+
+```{r}
+# using nleqslv to solve a non-linear system of equations
+library(nleqslv)
+
+mixture_moments = function(x, c1 = control_m1, c2 = control_m2, c3 = control_m3,
+                           t1 = treat_m1, t2 = treat_m2, t3 = treat_m3) {
+  y = numeric(3)
+  y[1] = (1 - x[1]) * c1 + 
+    x[1] * (x[2] * c1 + x[3]) - t1
+  y[2] = (1 - x[1]) * c2 + 
+    x[1] * (x[2]^2 * c2 + 2 * x[2] * x[3] * c1 + x[3]^2) - t2
+  y[3] = (1 - x[1]) * c3 + 
+    x[1] * (x[3]^3 * c3 + 3 * x[2]^2 * c2 * x[3] + 3 * x[2] * c1 * x[3]^2 + x[3]^3) - t3
+  y
+}
+
+xstart = c(0.5, 1, 10)
+solver_result = nleqslv(xstart, mixture_moments, control=list(btol = 0.0001, maxit = 400), jacobian = TRUE, method = "Broyden")
+solver_result
+# VERY close to the true values of c(theta, alpha, delta) if xstart is near true values
+# highly dependent on the value of xstart, if too far away, gives ridiculous results
+# even when executing without exceeding maximum iterations, doesn't converge near true param if the starting values are far off
+# so no unique convergence achievable 
+```
+
+
+
+
+

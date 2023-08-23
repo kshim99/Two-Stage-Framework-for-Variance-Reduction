@@ -1,0 +1,122 @@
+---
+title: "Research Rough Simulation"
+output: pdf_document
+date: "2023-08-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Experiment Setting
+
+Assume large proportion of observations are from heavy users, smaller from light users. In response, light users are assumed to have greater variance, because their usage patterns are not well established due to being new to the product, hence there is more randomness in their activity. 
+
+With randomization, there are basically the same proportion of light and heavy users in each treatment and control groups. 
+
+Heavy users have some pre-experimental data, light users do not. 
+
+```{r}
+set.seed(1)
+
+# set params
+heavy_mu = 100
+heavy_sd = 20
+heavy_prop = 0.80
+light_mu = 80
+light_sd = 50
+light_prop = 1 - heavy_prop
+n = 100
+mean_t_effect = 5
+
+# generate responses for light and heavy users
+heavy_exp = rnorm(round(n * heavy_prop), heavy_mu, heavy_sd) 
+light_exp = rnorm(round(n * light_prop), light_mu, light_sd)
+combined_exp = c(heavy_exp, light_exp)
+
+b = min(combined_exp) - 1
+e = max(combined_exp) + 1
+
+ax = round(seq(b, e, length.out = n / 4))
+
+# plot distributions
+hist(combined_exp, breaks = ax, col = rgb(1,0,0,0.25))
+hist(heavy_exp, breaks = ax, col = rgb(0,1,0,0.25))
+hist(light_exp, breaks = ax, col = rgb(0,0,1,0.25))
+
+# randomly assign treatments, treatment effects are assumed to be mostly positive with small variance
+group_size = round(length(combined_exp) / 2)
+t_assign = sample(1:length(combined_exp), group_size)
+t_effect = rnorm(group_size, mean_t_effect, 2)
+treatment = combined_exp[t_assign] + t_effect
+control = combined_exp[-t_assign]
+post_treat_ax = round(seq(min(c(treatment, control))-1, max(c(treatment, control))+1, length.out = n / 4))
+
+# plot treatment response vs control response
+hist(treatment, breaks = post_treat_ax, col = rgb(1,1,0,0.25))
+hist(control, breaks = post_treat_ax, add = TRUE, col = rgb(1,0,1,0.25))
+t = t.test(treatment, control)
+t
+power.t.test(group_size, mean(treatment) - mean(control), sd = t$stderr, sig.level = 0.05, type = "two.sample", alternative = "two.sided")
+```
+```{r}
+set.seed(1)
+# test with just heavy users
+group_size = round(length(heavy_exp) / 2)
+t_assign = sample(1:length(heavy_exp), group_size)
+t_effect = rnorm(group_size, mean_t_effect, 2)
+treatment = heavy_exp[t_assign] + t_effect
+control = heavy_exp[-t_assign]
+post_treat_ax = round(seq(min(c(treatment, control))-1, max(c(treatment, control))+1, length.out = n / 4))
+
+# plot treatment response vs control response
+hist(treatment, breaks = post_treat_ax, col = rgb(1,1,0,0.25))
+hist(control, breaks = post_treat_ax, add = TRUE, col = rgb(1,0,1,0.25))
+t = t.test(treatment, control)
+t
+power.t.test(group_size, mean(treatment) - mean(control), sd = t$stderr, sig.level = 0.05, type = "two.sample", alternative = "two.sided")
+```
+
+```{r}
+set.seed(1)
+# test with just heavy users
+group_size = round(length(light_exp) / 2)
+t_assign = sample(1:length(light_exp), group_size)
+t_effect = rnorm(group_size, mean_t_effect, 2)
+treatment = heavy_exp[t_assign] + t_effect
+control = heavy_exp[-t_assign]
+post_treat_ax = round(seq(min(c(treatment, control))-1, max(c(treatment, control))+1, length.out = n / 4))
+
+# plot treatment response vs control response
+hist(treatment, breaks = post_treat_ax, col = rgb(1,1,0,0.25))
+hist(control, breaks = post_treat_ax, add = TRUE, col = rgb(1,0,1,0.25))
+t = t.test(treatment, control)
+t
+power.t.test(group_size, mean(treatment) - mean(control), sd = t$stderr, sig.level = 0.05, type = "two.sample", alternative = "two.sided")
+```
+
+```{r}
+set.seed(1)
+# pre-experimental data for heavy users
+# how to reduce correlation? its unrealistically high. need more noise 
+heavy_pre = heavy_exp + rexp(length(heavy_exp), 1/10)*runif(length(heavy_exp), -1,1)
+theta = cov(heavy_exp, heavy_pre)/var(heavy_pre)
+heavy_cuped = heavy_exp - theta * heavy_pre + theta * mean(heavy_pre)
+
+# test with just heavy users applying cuped
+gp = heavy_cuped
+group_size = round(length(gp) / 2)
+t_assign = sample(1:length(gp), group_size)
+t_effect = rnorm(group_size, mean_t_effect, 2)
+treatment = gp[t_assign] + t_effect
+control = gp[-t_assign]
+post_treat_ax = round(seq(min(c(treatment, control))-1, max(c(treatment, control))+1, length.out = 10))
+
+# plot treatment response vs control response
+hist(treatment, breaks = post_treat_ax, col = rgb(1,1,0,0.25), ylim = c(0,0.5))
+hist(control, breaks = post_treat_ax, add = TRUE, col = rgb(1,0,1,0.25), ylim = c(0, 0.5))
+legend("topright", c("treatment", "control"), fill=c(rgb(1,1,0,0.25), rgb(1,0,1,0.25)))
+t = t.test(treatment, control)
+t
+power.t.test(group_size, mean(treatment) - mean(control), sd = t$stderr, sig.level = 0.05, type = "two.sample", alternative = "two.sided")
+```
