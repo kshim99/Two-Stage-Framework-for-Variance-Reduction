@@ -11,8 +11,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 # density visualization
-delta = 5
-alpha = 2
+delta = 2
+alpha = 5
 theta = 0.2
 x = seq(-5, 10, 0.01)
 
@@ -30,7 +30,7 @@ abline(v = delta * theta, col='purple', lty = 2)
 ```{r}
 # simulate sampling from mixture
 set.seed(2)
-n = 1000000
+n = 1000
 p = runif(n)
 n_non_resp = sum(p > theta)
 n_resp = sum(p <= theta)
@@ -93,7 +93,54 @@ solver_result
 # so no unique convergence achievable 
 ```
 
+```{r}
+# try em with mclust
+library(mclust)
 
+mod = Mclust(s_mix)
 
+```
+
+```{r}
+#summary(mod)
+#plot(mod, what="BIC")
+#mod$parameters
+paste0('Estimated parameters alpha: ', sqrt(mod$parameters$variance$sigmasq[2]),', delta: ', mod$parameters$mean[2],', theta: ', mod$parameters$pro[2])
+paste0('True parameters alpha: ', alpha,', delta: ', delta,', theta: ', theta)
+# note that we had no initialization - initial params were chosen randomly
+# works well with true param triplets c(alpha, delta, theta)
+# (2,5,0.2), (5,2,0.5), (1, 10, 0.1) equal variance works good with EM algorithm too 
+```
+```{R}
+# true distribution vs estimated distribution with EM
+
+x = seq(-5, 10, 0.01)
+
+#true
+non_resp = dnorm(x)
+resp = dnorm(x, delta, alpha)
+plot(x, non_resp, col='red', type='l')
+lines(x, resp, col='blue', type='l')
+mixed = (1-theta) * non_resp + theta * resp
+lines(x, mixed, col='purple', type='l')
+
+#estimated params
+mus = mod$parameters$mean
+vars = mod$parameters$variance$sigmasq
+if (length(vars) == 1) {
+  vars = c(vars, vars)
+}
+props = mod$parameters$pro
+
+non_resp_est = dnorm(x, mus[1], sqrt(vars[1]))
+resp_est = dnorm(x, mus[2], sqrt(vars[2]))
+lines(x, non_resp_est, col='red',lty=2)
+lines(x, resp_est, col='blue', lty=2)
+mixed_est = props[1] * non_resp_est + props[2] * resp_est
+lines(x, mixed_est, col='purple', lty=2)
+legend("topright", legend=c("Non-Responders","Responders","Mixture"),
+       col=c("red", "blue",'purple'), lty=1, cex=0.8)
+
+```
 
 
