@@ -21,7 +21,7 @@ x = seq(-5, 10, 0.01)
 num_cls = 3
 thetas = c(0.2, 0.5, 0.3)
 deltas = c(0, 2, 8)
-alphas = c(1, 5, 2)
+alphas = c(1, 2, 2)
 
 # Specify list of colors, at least num_cls + 1 many distinct ones for plotting
 cols = c('red','blue','purple','black')
@@ -59,10 +59,10 @@ for (i in 1:num_cls) {
 # histograms of samples - need to manually add histograms if more components due to color specification
 x_lims = c(min(combined_sample), max(combined_sample))
 bin_width = (x_lims[2]-x_lims[1])/50
-p1 = hist(samples[[1]], col = cols[1], xlim = x_lims, prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width))
+p1 = hist(samples[[1]], col = cols[1], xlim = x_lims, ylim = c(0, 0.5), prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width))
 p2 = hist(samples[[2]], col = cols[2], xlim = x_lims, prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
 p3 = hist(samples[[3]], col = cols[3], xlim = x_lims, prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
-pc = hist(combined_sample, col = cols[4], xlim = x_lims, prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width))
+pc = hist(combined_sample, col = cols[4], xlim = x_lims, ylim = c(0, 0.5), prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width))
 ```
 
 ```{r}
@@ -96,29 +96,25 @@ tru_params
 # plot densities of true and estimated densities
 
 tru_dens = list()
-for (i in 1:num_cls) {
-  tru_dens[[i]] = dnorm(x, deltas[i], alphas[i])
-}
-tru_mix = tru_dens[[1]] * thetas[1]
-for (i in 2:num_cls) {
-  tru_mix = tru_mix + tru_dens[[i]] * thetas[i]
-}
-
 est_dens = list()
 for (i in 1:num_cls) {
+  tru_dens[[i]] = dnorm(x, deltas[i], alphas[i])
   est_dens[[i]] = dnorm(x, est_params['Delta',i], est_params['Alpha',i])
 }
+
+tru_mix = tru_dens[[1]] * thetas[1]
 est_mix = est_dens[[1]] * est_params['Theta',1]
+
 for (i in 2:num_cls) {
+  tru_mix = tru_mix + tru_dens[[i]] * thetas[i]
   est_mix = est_mix + est_dens[[i]] * est_params['Theta',i]
 }
+
 
 plot(x, tru_mix, col = cols[num_cls+1], type='l', ylim = c(0, 0.5))
 lines(x, est_mix, col = cols[num_cls+1], lty=2)
 for (i in 1:num_cls) {
   lines(x, tru_dens[[i]], col = cols[i])
-}
-for (i in 1:num_cls) {
   lines(x, est_dens[[i]], col = cols[i], lty=2)
 }
 legend("topright", legend=c(seq(1,num_cls), "Mixture"),
@@ -126,5 +122,28 @@ legend("topright", legend=c(seq(1,num_cls), "Mixture"),
 
 ```
 
+```{R}
+# works very well with 
+num_cls = 3
+thetas = c(0.2, 0.5, 0.3)
+deltas = c(0, 2, 8)
+alphas = c(3, 1, 2)
+
+# works poorly with
+num_cls = 3
+thetas = c(0.2, 0.5, 0.3)
+deltas = c(0, 2, 8)
+alphas = c(1, 5, 2)
+
+# only small changes in variance, but big difference in EM performance
+# order of densities beign estimated important 
+
+# wrong number of classes with 
+num_cls = 3
+thetas = c(0.2, 0.5, 0.3)
+deltas = c(0, 2, 8)
+alphas = c(1, 2, 2)
+# estimates num_cls = 2
+```
 
 
