@@ -1,0 +1,130 @@
+---
+title: "mixture_model_multiple_comp"
+output: pdf_document
+date: "2023-09-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{R}
+library(hash)
+# parameters
+seed = 1
+n = 1000
+x = seq(-5, 10, 0.01)
+
+# model param for more than 2 groups become vectors
+# thetas must sum to 1
+num_cls = 3
+thetas = c(0.2, 0.5, 0.3)
+deltas = c(0, 2, 8)
+alphas = c(1, 5, 2)
+
+# Specify list of colors, at least num_cls + 1 many distinct ones for plotting
+cols = c('red','blue','purple','black')
+```
+```{r}
+# simulate sampling from mixture
+set.seed(seed)
+p = runif(n)
+
+# determine sample size of each group
+group_size = c()
+for (i in 1:num_cls) {
+  if (i == 1) {
+    group_size[i] = sum(p < thetas[i])
+  } else {
+    group_size[i] = sum(p < sum(thetas[1:i]) & p >= sum(thetas[1:i-1]))
+  }
+}
+
+# take samples based on parameters
+samples = list()
+for (i in 1:num_cls) {
+  samples[[i]] = rnorm(group_size[i], deltas[i], alphas[i])
+}
+
+# combined sample
+combined_sample = c()
+for (i in 1:num_cls) {
+  combined_sample = append(combined_sample, samples[[i]])
+}
+
+```
+
+```{r}
+# histograms of samples - need to manually add histograms if more components due to color specification
+x_lims = c(min(combined_sample), max(combined_sample))
+bin_width = (x_lims[2]-x_lims[1])/50
+p1 = hist(samples[[1]], col = cols[1], xlim = x_lims, prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width))
+p2 = hist(samples[[2]], col = cols[2], xlim = x_lims, prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
+p3 = hist(samples[[3]], col = cols[3], xlim = x_lims, prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
+pc = hist(combined_sample, col = cols[4], xlim = x_lims, prob = TRUE, breaks = seq(x_lims[1], x_lims[2], bin_width))
+```
+
+```{r}
+# EM Fitting
+library(mclust)
+mod = Mclust(combined_sample)
+```
+
+```{r}
+# EM estimated parameters 
+paste0("Number of Classes: ", mod$G)
+est_params = data.frame(matrix(nrow = 3, ncol = num_cls))
+rownames(est_params) = c("Delta","Alpha","Theta")
+colnames(est_params) = seq(1,num_cls)
+est_params["Delta",] = mod$parameters$mean
+est_params["Alpha",] = sqrt(mod$parameters$variance$sigmasq)
+est_params["Theta",] = mod$parameters$pro
+est_params
+
+# True parameters
+tru_params = data.frame(matrix(nrow = 3, ncol = num_cls))
+rownames(tru_params) = c("Delta","Alpha","Theta")
+colnames(tru_params) = seq(1,num_cls)
+tru_params["Delta",] = deltas
+tru_params["Alpha",] = alphas
+tru_params["Theta",] = thetas
+tru_params
+
+```
+```{R}
+# plot densities of true and estimated densities
+
+tru_dens = list()
+for (i in 1:num_cls) {
+  tru_dens[[i]] = dnorm(x, deltas[i], alphas[i])
+}
+tru_mix = tru_dens[[1]] * thetas[1]
+for (i in 2:num_cls) {
+  tru_mix = tru_mix + tru_dens[[i]] * thetas[i]
+}
+
+est_dens = list()
+for (i in 1:num_cls) {
+  est_dens[[i]] = dnorm(x, est_params['Delta',i], est_params['Alpha',i])
+}
+est_mix = est_dens[[1]] * est_params['Theta',1]
+for (i in 2:num_cls) {
+  est_mix = est_mix + est_dens[[i]] * est_params['Theta',i]
+}
+
+plot(x, tru_mix, col = cols[num_cls+1], type='l', ylim = c(0, 0.5))
+lines(x, est_mix, col = cols[num_cls+1], lty=2)
+for (i in 1:num_cls) {
+  lines(x, tru_dens[[i]], col = cols[i])
+}
+for (i in 1:num_cls) {
+  lines(x, est_dens[[i]], col = cols[i], lty=2)
+}
+legend("topright", legend=c(seq(1,num_cls), "Mixture"),
+       col=cols, lty=1, cex=0.8)
+
+```
+
+
+
