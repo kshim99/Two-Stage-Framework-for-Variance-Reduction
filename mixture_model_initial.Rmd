@@ -11,9 +11,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 # density visualization
-delta = 2
-alpha = 5
-theta = 0.2
+delta = 10
+alpha = 1
+theta = 0.1
 x = seq(-5, 10, 0.01)
 
 non_resp = dnorm(x)
@@ -30,7 +30,7 @@ abline(v = delta * theta, col='purple', lty = 2)
 ```{r}
 # simulate sampling from mixture
 set.seed(2)
-n = 1000
+n = 100
 p = runif(n)
 n_non_resp = sum(p > theta)
 n_resp = sum(p <= theta)

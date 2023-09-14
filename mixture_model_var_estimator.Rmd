@@ -1,0 +1,119 @@
+---
+title: "mixture_model_variance_est"
+output: pdf_document
+date: "2023-09-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{R}
+library(mclust)
+# parameters
+seed = 1
+n = 1000
+x = seq(-5, 10, 0.01)
+number_of_sim = 1000
+
+# model param for more than 2 groups become vectors
+# thetas must sum to 1
+num_cls = 2
+thetas = c(0.2, 0.8)
+deltas = c(0, 2)
+alphas = c(1, 1)
+
+# Specify list of colors, at least num_cls + 1 many distinct ones for plotting
+cols = c(rgb(1,0,0,1/4),rgb(0,0,1,1/4),rgb(0.5, 0, 0.5, 1/4))
+```
+```{r}
+#sampling function
+sampling_func = function() {
+  # simulate sampling from mixture
+  p = runif(n)
+
+  # determine sample size of each group
+  group_size = c()
+  for (i in 1:num_cls) {
+    if (i == 1) {
+      group_size[i] = sum(p < thetas[i])
+    } else {
+      group_size[i] = sum(p < sum(thetas[1:i]) & p >= sum(thetas[1:i-1]))
+    }
+  }
+
+  # take samples based on parameters
+  samples = list()
+  for (i in 1:num_cls) {
+    samples[[i]] = rnorm(group_size[i], deltas[i], alphas[i])
+  }
+  
+  # combined sample
+  combined_sample = c()
+  for (i in 1:num_cls) {
+    combined_sample = append(combined_sample, samples[[i]])
+  }
+  combined_sample = sample(combined_sample)
+  return(combined_sample)
+}
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+param_ests = data.frame(matrix(data = NA, nrow = number_of_sim, ncol = 7))
+colnames(param_ests) = c("Delta1","Delta2","Alpha1","Alpha2","Theta1","Theta2", "Num_Cls")
+for (i in 1:number_of_sim) {
+  s = sampling_func()
+  mod = Mclust(s)
+  
+  vars = sqrt(mod$parameters$variance$sigmasq)
+  means = mod$parameters$mean
+  props = mod$parameters$pro
+  if (length(vars) == 1) {
+    vars = c(vars, vars)
+  }
+  
+  if (mod$G == 1) {
+    means = c(means, NA)
+    props = c(props, NA)
+    vars = c(vars[1], NA)
+  }
+  param_ests[i,] = c(means, vars, props, mod$G)
+}
+
+```
+
+
+```{r}
+wrong_num_cls = sum(param_ests$Num_Cls == 1)
+only_correct = param_ests[param_ests$Num_Cls == num_cls,]
+x_lims = c(min(c(only_correct$Delta1, only_correct$Delta2)), max(c(only_correct$Delta1, only_correct$Delta2)))
+bin_width = (x_lims[2]-x_lims[1])/50
+p1 = hist(only_correct$Delta1, freq = TRUE, col = cols[1], xlim = x_lims, ylim = c(0, 300), breaks = seq(x_lims[1], x_lims[2], bin_width), main = "Histogram of Delta Estimates", xlab = "Delta Estimates")
+p2 = hist(only_correct$Delta2, freq = TRUE, col = cols[2], xlim = x_lims, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
+abline(v = deltas, col = cols[1:2], lty = 1)
+abline(v = c(mean(only_correct$Delta1), mean(only_correct$Delta2)), col = cols[1:2], lty = 2)
+# larger proportion gets more peaked mean distribution since more observations
+# smaller proportion gets wider spread in mean distribution since less observations 
+```
+
+```{r}
+x_lims = c(min(c(only_correct$Alpha1, only_correct$Alpha2)), max(c(only_correct$Alpha1, only_correct$Alpha2)))
+bin_width = (x_lims[2]-x_lims[1])/50
+p1 = hist(only_correct$Alpha1, freq = TRUE, col = cols[1], xlim = x_lims, ylim = c(0, 50), breaks = seq(x_lims[1], x_lims[2], bin_width), main = "Histogram of Alpha Estimates", xlab = "Alpha Estimates")
+p2 = hist(only_correct$Alpha2, freq = TRUE, col = cols[2], xlim = x_lims, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
+abline(v = alphas, col = cols[1:2], lty = 1)
+abline(v = c(mean(only_correct$Alpha1), mean(only_correct$Alpha2)), col = cols[1:2], lty = 2)
+# almost ocmpletely overlaps if true alphas were equal - expected
+```
+
+```{r}
+x_lims = c(min(c(only_correct$Theta1, only_correct$Theta2)), max(c(only_correct$Theta1, only_correct$Theta2)))
+bin_width = (x_lims[2]-x_lims[1])/50
+p1 = hist(only_correct$Theta1, freq = TRUE, col = cols[1], xlim = x_lims, ylim = c(0, 200), breaks = seq(x_lims[1], x_lims[2], bin_width), main = "Histogram of Theta Estimates", xlab = "Theta Estimates")
+p2 = hist(only_correct$Theta2, freq = TRUE, col = cols[2], xlim = x_lims, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
+abline(v = thetas, col = cols[1:2], lty = 1)
+abline(v = c(mean(only_correct$Theta1), mean(only_correct$Theta2)), col = cols[1:2], lty = 2)
+
+# always symmetric since thetas must add up to 1, so if theta1 is some value, theta2 must be 1 - theta1
+# same variance 
+```

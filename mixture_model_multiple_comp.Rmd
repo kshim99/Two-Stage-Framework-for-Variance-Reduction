@@ -10,7 +10,6 @@ knitr::opts_chunk$set(echo = TRUE)
 
 
 ```{R}
-library(hash)
 # parameters
 seed = 1
 n = 1000
@@ -21,7 +20,7 @@ x = seq(-5, 10, 0.01)
 num_cls = 3
 thetas = c(0.2, 0.5, 0.3)
 deltas = c(0, 2, 8)
-alphas = c(1, 2, 2)
+alphas = c(1, 1, 2)
 
 # Specify list of colors, at least num_cls + 1 many distinct ones for plotting
 cols = c('red','blue','purple','black')
@@ -52,6 +51,7 @@ combined_sample = c()
 for (i in 1:num_cls) {
   combined_sample = append(combined_sample, samples[[i]])
 }
+combined_sample = sample(combined_sample)
 
 ```
 
@@ -74,9 +74,9 @@ mod = Mclust(combined_sample)
 ```{r}
 # EM estimated parameters 
 paste0("Number of Classes: ", mod$G)
-est_params = data.frame(matrix(nrow = 3, ncol = num_cls))
+est_params = data.frame(matrix(nrow = 3, ncol = mod$G))
 rownames(est_params) = c("Delta","Alpha","Theta")
-colnames(est_params) = seq(1,num_cls)
+colnames(est_params) = seq(1,mod$G)
 est_params["Delta",] = mod$parameters$mean
 est_params["Alpha",] = sqrt(mod$parameters$variance$sigmasq)
 est_params["Theta",] = mod$parameters$pro
@@ -99,6 +99,8 @@ tru_dens = list()
 est_dens = list()
 for (i in 1:num_cls) {
   tru_dens[[i]] = dnorm(x, deltas[i], alphas[i])
+}
+for (i in 1:mod$G) {
   est_dens[[i]] = dnorm(x, est_params['Delta',i], est_params['Alpha',i])
 }
 
@@ -107,13 +109,17 @@ est_mix = est_dens[[1]] * est_params['Theta',1]
 
 for (i in 2:num_cls) {
   tru_mix = tru_mix + tru_dens[[i]] * thetas[i]
+}
+for (i in 2:mod$G) {
   est_mix = est_mix + est_dens[[i]] * est_params['Theta',i]
 }
-
 
 plot(x, tru_mix, col = cols[num_cls+1], type='l', ylim = c(0, 0.5))
 lines(x, est_mix, col = cols[num_cls+1], lty=2)
 for (i in 1:num_cls) {
+  lines(x, tru_dens[[i]], col = cols[i])
+}
+for (i in 1:mod$G) {
   lines(x, tru_dens[[i]], col = cols[i])
   lines(x, est_dens[[i]], col = cols[i], lty=2)
 }
@@ -136,13 +142,18 @@ deltas = c(0, 2, 8)
 alphas = c(1, 5, 2)
 
 # only small changes in variance, but big difference in EM performance
-# order of densities beign estimated important 
+# order of densities being estimated important 
 
 # wrong number of classes with 
 num_cls = 3
 thetas = c(0.2, 0.5, 0.3)
 deltas = c(0, 2, 8)
-alphas = c(1, 2, 2)
+alphas = c(1, 1, 2)
+# estimates num_cls = 2
+num_cls = 3
+thetas = c(0.2, 0.5, 0.3)
+deltas = c(0, -2, 3)
+alphas = c(1, 4, 4)
 # estimates num_cls = 2
 ```
 
