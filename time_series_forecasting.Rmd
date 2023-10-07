@@ -1,0 +1,223 @@
+---
+title: "Untitled"
+author: "Kyu Min Shim"
+date: "2023-10-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(prophet)
+library(forecast)
+```
+
+## Time Series Forecasting
+```{r}
+current_dir = getwd()
+data_dir = file.path(current_dir, "..","AB","page_visits_assignment.csv")
+page_vis = read.csv(data_dir)
+```
+## select only response and date
+```{r}
+page_vis = rename(page_vis, ds = Date, y = Visits)
+page_vis$ds = mdy(page_vis$ds)
+page_vis = page_vis[,c("ds","y")]
+```
+## lets see if we can fit a reasonable time series to this data
+```{r}
+log_y = log(page_vis$y)
+plot(page_vis$ds, log_y, type = "l")
+```
+```{r}
+acf(log_y)
+pacf(log_y)
+# appears to have period of 7, decreasing trend
+```
+```{R}
+b7data = diff(diff(log_y, difference=1), lag = 7, difference = 1)
+plot(b7data, type = "l")
+acf(b7data)
+pacf(b7data)
+# acf seems stationary, d = 1, D = 1, S = 7
+# (p,q): (0,1), (0,6), (1,1), (1,6)
+# (P,Q): (0,1), (1,0), (1,1)
+```
+```{r}
+params1 = rbind(c(0,1,1),c(1,1,6),c(1,1,1))
+params2 = rbind(c(0,1,1),c(1,1,0),c(1,1,1))
+```
+```{r}
+# best with (p,d,q) = (1,1,6) and (P,D,Q) = (1,1,1)
+model = arima(log_y, order = params1[2,], seasonal = list(order = params2[3,], period=7))
+resid = model$residuals
+plot(resid)
+abline(h = 0, lty=2)
+acf(resid)
+qqnorm(resid)
+qqline(resid)
+tsdiag(model)
+```
+```{r}
+# more objective comparison with aic
+res = rep(0, 9)
+for (i in 1:3) {
+  for (j in 1:3) {
+    model = arima(log_y, order = params1[i,], seasonal = list(order = params2[j,], period = 7))
+    res[3 * (i-1) + j] = model$aic
+  }
+}
+# best models: (i,j) = (2,1), (2,3). Let's do graph eval
+```
+```{r}
+model1 = arima(log_y, order = params1[2,], seasonal = list(order = params2[1,], period=7))
+resid = model1$residuals
+plot(resid)
+abline(h = 0, lty=2)
+acf(resid)
+qqnorm(resid)
+qqline(resid)
+tsdiag(model)
+```
+```{r}
+model2 = arima(log_y, order = params1[2,], seasonal = list(order = params2[3,], period=7))
+resid = model2$residuals
+plot(resid)
+abline(h = 0, lty=2)
+acf(resid)
+qqnorm(resid)
+qqline(resid)
+tsdiag(model)
+```
+```{r}
+plot(page_vis$ds, page_vis$y, type = 'l', col = 'black')
+lines(page_vis$ds, exp(fitted(model1)), type = 'l', col = 'red')
+# we can get a very good fit between the two time series
+# let's see how the predictions do with this, assuming we only have access to training and we want to predict the test data
+```
+```{r}
+# train new time series with just the train data.
+# lets actually cut off data starting 2020 because there seems to be alot of change points 
+# also, lets stop before holidays because there is more variability there
+# use log of y for constant var 
+train = page_vis[page_vis$ds < '2019-10-01',]
+test = page_vis[page_vis$ds < '2019-11-01' & page_vis$ds >= '2019-10-01',]
+plot(train$ds, log(train$y), xlim = c(min(train$ds), max(test$ds)), ylim = c(min(log(train$y)), max(log(train$y))), type = 'l', col = 'black', ylab = 'Log of page visits', xlab = 'Time')
+title('Log-scaled page visits')
+lines(test$ds, log(test$y), type='l', col = 'red')
+legend('bottomright', legend = c('train data','test data'), col = c('black','red'), lty = 1)
+```
+```{r}
+# from now, only work with train data
+train_y = log(train$y)
+acf(train_y)
+pacf(train_y)
+# period of 7, decreasing -> d = 1, s = 7, D = 1
+```
+```{r}
+b7data = diff(diff(train_y, difference=1), lag = 7, difference = 1)
+plot(b7data, type = "l")
+acf(b7data)
+pacf(b7data)
+# acf seems stationary, d = 1, D = 1, S = 7
+# (p,q): (0,1), (0,6), (1,1), (1,6)
+# (P,Q): (0,1), (1,0), (1,1)
+```
+```{R}
+# define set of params to try for SARIMA model
+params1 = rbind(c(0,1,1),c(1,1,6),c(1,1,1))
+params2 = rbind(c(0,1,1),c(1,1,0),c(1,1,1))
+```
+```{r}
+# choose best model with aic
+res = rep(0, 9)
+for (i in 1:3) {
+  for (j in 1:3) {
+    model = arima(train_y, order = params1[i,], seasonal = list(order = params2[j,], period = 7))
+    res[3 * (i-1) + j] = model$aic
+  }
+}
+# best model with (i,j) = (2,3)
+```
+```{r}
+# fit best model, check residuals
+model1 = arima(train_y, order = params1[2,], seasonal = list(order = params2[3,], period=7))
+resid = model1$residuals
+plot(resid)
+abline(h = 0, lty=2)
+acf(resid)
+qqnorm(resid)
+qqline(resid)
+tsdiag(model)
+```
+```{r}
+# plot predictions of the test data and the true test data 
+test_y = log(test$y)
+forecast_res = forecast(model1, h = nrow(test), level = 95)
+plot(train$ds, exp(train_y), xlim = c(min(test$ds) -100, max(test$ds)), type = 'l', col = 'black')
+lines(test$ds, exp(test_y), col = 'red')
+lines(c(train$ds,test$ds), c(exp(fitted(model1)),exp(forecast_res$mean)), lty = 1, col = 'blue')
+lines(test$ds, exp(forecast_res$lower), lty = 2, col = 'blue')
+lines(test$ds, exp(forecast_res$upper), lty = 2, col = 'blue')
+```
+Now we can see a time series can model the data pretty well. 
+Now suppose we get the test data, but some follow a constant-shifted time series instead of the one that is fit. 
+That constant shift is unknown, and needs to be estimated (the treatment effect).
+
+```{r}
+set.seed(1)
+control_idx = sample(seq(1,nrow(test)), nrow(test)/2, replace = FALSE)
+control = test[control_idx,]
+treat = test[-control_idx,]
+treat$y = treat$y + 200
+plot(train$ds, train_y, xlim = c(min(test$ds) -100, max(test$ds)), type = 'l', col = 'black',ylab = "Log of page visits",xlab ="Time")
+title("Log-scaled page visits")
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, forecast_res$mean, lty = 2, col = 'red')
+#points(test$ds, log(test$y), col = 'red')
+points(control$ds, log(control$y), col='red')
+lines(test$ds, forecast_res$mean + 0.1, lty = 2, col = 'green')
+points(treat$ds, log(treat$y), col='green')
+#legend('bottomright', legend = c('train data','fitted train data','preds'), col = c('black','blue','red'), lty = c(1,1,2))
+legend('bottomright', legend = c('train data','fitted train data','Control TS', 'Treatment TS'), col = c('black','blue','red','green'), lty = c(1,1,2,2))
+
+```
+IMPORTANT: need to consider the sample size, power, mde, and type 1 error rate. Suppose the switchback experiment is run for long enough to detect certain mde with certain power and alpha level. To simulate, we must reverse calculate for the treatment effect to be applied to the treatment group, given the number of samples we have in our test data. 
+
+```{r}
+# lets try to find the shift t on the time series that minimizes some error function with the treatment outcomes
+loss_fun = function(t, preds, obs, type = 'least squares') {
+  # preds are the expected control outcomes on the treatment days 
+  # obs are the observedtreatment outcome
+  # t is the shift applied to control outcomes to be compared to the observed treatment outcome
+  loss = 0
+  shifted_preds = preds + t
+  if (type == 'least squares') {
+    loss = sum((shifted_preds - obs)^2)
+  } else if (type == 'absolute deviation') {
+    loss = sum(abs(shifted_preds - obs))
+  }
+    else {
+      stop("invalid type parameter")
+  }
+  return(loss)
+}
+```
+```{R}
+# minimize loss_fun over t
+o = optimize(loss_fun, forecast_res$mean[-control_idx], log(treat$y), interval = c(-2,2))
+# or plot all the loss values across some range of potential t's 
+potential_t = seq(-1,1,0.01)
+loss = rep(0, length(potential_t))
+for (i in 1:length(potential_t)) {
+  loss[i] = loss_fun(potential_t[i], forecast_res$mean[-control_idx], log(treat$y))
+}
+plot(potential_t, loss)
+optimal_t = potential_t[which.min(loss)]
+# problem: the control time series can be shifted to better fit the CONTROL data points as well. 
+# this may inflate the treatment effect (optimal shift for control data is -0.1, optimal shift for treatment data is 0.1, then total treatment effect shifting both control and treatment becomes 0.2, which is twice the true treatment effect)
+```
