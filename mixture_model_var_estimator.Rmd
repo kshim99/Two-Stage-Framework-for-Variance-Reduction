@@ -20,7 +20,7 @@ number_of_sim = 1000
 # thetas must sum to 1
 num_cls = 2
 thetas = c(0.2, 0.8)
-deltas = c(0, 2)
+deltas = c(1, 3)
 alphas = c(1, 1)
 
 # Specify list of colors, at least num_cls + 1 many distinct ones for plotting
@@ -59,6 +59,7 @@ sampling_func = function() {
 ```
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
+set.seed(seed)
 param_ests = data.frame(matrix(data = NA, nrow = number_of_sim, ncol = 7))
 colnames(param_ests) = c("Delta1","Delta2","Alpha1","Alpha2","Theta1","Theta2", "Num_Cls")
 for (i in 1:number_of_sim) {
@@ -95,14 +96,36 @@ abline(v = c(mean(only_correct$Delta1), mean(only_correct$Delta2)), col = cols[1
 # larger proportion gets more peaked mean distribution since more observations
 # smaller proportion gets wider spread in mean distribution since less observations 
 ```
+```{r}
+# ratio between estimate and true param
+wrong_num_cls = sum(param_ests$Num_Cls == 1)
+only_correct = param_ests[param_ests$Num_Cls == num_cls,]
+x_lims = c(min(c(only_correct$Delta1, only_correct$Delta2)), max(c(only_correct$Delta1, only_correct$Delta2)))
+bin_width = (x_lims[2]-x_lims[1])/50
+p1 = hist(only_correct$Delta1/deltas[1], freq = TRUE, col = cols[1], xlim = x_lims, ylim = c(0, 800), breaks = seq(x_lims[1], x_lims[2], bin_width), main = "Histogram of Delta Estimates and True Ratio", xlab = "Delta Ratio")
+p2 = hist(only_correct$Delta2/deltas[2], freq = TRUE, col = cols[2], xlim = x_lims, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
+abline(v = c(1,1), col = cols[1:2], lty = 1)
+abline(v = c(mean(only_correct$Delta1)/deltas[1], mean(only_correct$Delta2)/deltas[2]), col = cols[1:2], lty = 2)
+# larger proportion gets more peaked mean distribution since more observations
+# smaller proportion gets wider spread in mean distribution since less observations 
+```
 
 ```{r}
 x_lims = c(min(c(only_correct$Alpha1, only_correct$Alpha2)), max(c(only_correct$Alpha1, only_correct$Alpha2)))
 bin_width = (x_lims[2]-x_lims[1])/50
-p1 = hist(only_correct$Alpha1, freq = TRUE, col = cols[1], xlim = x_lims, ylim = c(0, 50), breaks = seq(x_lims[1], x_lims[2], bin_width), main = "Histogram of Alpha Estimates", xlab = "Alpha Estimates")
+p1 = hist(only_correct$Alpha1, freq = TRUE, col = cols[1], xlim = x_lims, ylim = c(0, 150), breaks = seq(x_lims[1], x_lims[2], bin_width), main = "Histogram of Alpha Estimates", xlab = "Alpha Estimates")
 p2 = hist(only_correct$Alpha2, freq = TRUE, col = cols[2], xlim = x_lims, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
 abline(v = alphas, col = cols[1:2], lty = 1)
 abline(v = c(mean(only_correct$Alpha1), mean(only_correct$Alpha2)), col = cols[1:2], lty = 2)
+# almost ocmpletely overlaps if true alphas were equal - expected
+```
+```{r}
+x_lims = c(min(c(only_correct$Alpha1, only_correct$Alpha2)), max(c(only_correct$Alpha1, only_correct$Alpha2)))
+bin_width = (x_lims[2]-x_lims[1])/50
+p1 = hist(only_correct$Alpha1/alphas[1], freq = TRUE, col = cols[1], xlim = x_lims, ylim = c(0, 150), breaks = seq(x_lims[1], x_lims[2], bin_width), main = "Histogram of Alpha Estimates and True Ratio", xlab = "Alpha Ratios")
+p2 = hist(only_correct$Alpha2/alphas[2], freq = TRUE, col = cols[2], xlim = x_lims, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
+abline(v = c(1,1), col = cols[1:2], lty = 1)
+abline(v = c(mean(only_correct$Alpha1)/alphas[1], mean(only_correct$Alpha2)/alphas[2]), col = cols[1:2], lty = 2)
 # almost ocmpletely overlaps if true alphas were equal - expected
 ```
 
@@ -113,6 +136,18 @@ p1 = hist(only_correct$Theta1, freq = TRUE, col = cols[1], xlim = x_lims, ylim =
 p2 = hist(only_correct$Theta2, freq = TRUE, col = cols[2], xlim = x_lims, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
 abline(v = thetas, col = cols[1:2], lty = 1)
 abline(v = c(mean(only_correct$Theta1), mean(only_correct$Theta2)), col = cols[1:2], lty = 2)
+
+# always symmetric since thetas must add up to 1, so if theta1 is some value, theta2 must be 1 - theta1
+# same variance 
+```
+
+```{r}
+x_lims = c(min(c(only_correct$Theta1/thetas[1], only_correct$Theta2/thetas[2])), max(c(only_correct$Theta1/thetas[1], only_correct$Theta2/thetas[2])))
+bin_width = (x_lims[2]-x_lims[1])/50
+p1 = hist(only_correct$Theta1/thetas[1], freq = TRUE, col = cols[1], xlim = x_lims, ylim = c(0, 500), breaks = seq(x_lims[1], x_lims[2], bin_width), main = "Histogram of Theta Estimates and True Ratio", xlab = "Theta Ratios")
+p2 = hist(only_correct$Theta2/thetas[2], freq = TRUE, col = cols[2], xlim = x_lims, breaks = seq(x_lims[1], x_lims[2], bin_width), add = TRUE)
+abline(v = c(1,1), col = cols[1:2], lty = 1)
+abline(v = c(mean(only_correct$Theta1)/thetas[1], mean(only_correct$Theta2)/thetas[2]), col = cols[1:2], lty = 2)
 
 # always symmetric since thetas must add up to 1, so if theta1 is some value, theta2 must be 1 - theta1
 # same variance 
