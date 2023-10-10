@@ -184,4 +184,24 @@ control_combined = c(treat_cnt, control_y)
 t.test(treat_combined, control_combined, paired=TRUE, alternative='two.sided')
 # fitting time series to both control and treatment gives less biased results. again, with lower variance compared to regular two sample t-test 
 # tried simulations (seed, te) = (1, 0.1), (1, 0.5), (10, 0.5), (10, 0.1)
+# how about we only use the time series to obtain seasonality associated with data, which justifies fitting the time series to each control and treatment group 
 ```
+```{R}
+# try to figure out why only optimizing timeseries shift for treatment outcomes is biased
+errors = forecast_res$mean - test_y
+plot(errors, type = 'p',ylab = 'estimate - true')
+abline(h=0, col='red',lty=2)
+# the historical timeseries itself was OVERestimating the outcome on average
+# so when the time series shift up to optimize for treatment outcomes, it doesn't have to shift up as much to minimize least square difference with treatment outcomes
+# this results in underestimate of treatment effect
+# but this is eliminated when the timeseries is optimized for treamtnet oucomes AND control outcomes as it removes the under/overestimate of the time series and fits to the data itself 
+# by finding least square fit shift to control and treatment separately, we can more accurately estimate the treatment effect 
+
+
+```
+
+
+
+
+
+
