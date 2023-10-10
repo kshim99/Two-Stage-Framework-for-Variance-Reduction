@@ -1,0 +1,187 @@
+---
+title: "time_series_forecasting_clean"
+output: pdf_document
+date: "2023-10-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(forecast)
+```
+
+## Time Series Forecasting
+```{r}
+current_dir = getwd()
+data_dir = file.path(current_dir, "..","AB","page_visits_assignment.csv")
+page_vis = read.csv(data_dir)
+```
+## select only response and date
+```{r}
+page_vis = rename(page_vis, ds = Date, y = Visits)
+page_vis$ds = mdy(page_vis$ds)
+page_vis = page_vis[,c("ds","y")]
+```
+```{r}
+# train new time series with just the train data.
+# lets actually cut off data starting 2020 because there seems to be alot of change points 
+# also, lets stop before holidays because there is more variability there
+# use log of y for constant var 
+train = page_vis[page_vis$ds < '2019-10-01',]
+test = page_vis[page_vis$ds < '2019-11-01' & page_vis$ds >= '2019-10-01',]
+plot(train$ds, log(train$y), xlim = c(min(train$ds), max(test$ds)), ylim = c(min(log(train$y)), max(log(train$y))), type = 'l', col = 'black', ylab = 'Log of page visits', xlab = 'Time')
+title('Log-scaled page visits')
+lines(test$ds, log(test$y), type='l', col = 'red')
+legend('bottomright', legend = c('train data','test data'), col = c('black','red'), lty = 1)
+```
+```{r}
+# from now, only work with train data
+train_y = log(train$y)
+acf(train_y)
+pacf(train_y)
+# period of 7, decreasing -> d = 1, s = 7, D = 1
+b7data = diff(diff(train_y, difference=1), lag = 7, difference = 1)
+plot(b7data, type = "l")
+acf(b7data)
+pacf(b7data)
+# acf seems stationary, d = 1, D = 1, S = 7
+# (p,q): (0,1), (0,6), (1,1), (1,6)
+# (P,Q): (0,1), (1,0), (1,1)
+```
+```{R}
+# define set of params to try for SARIMA model
+params1 = rbind(c(0,1,1),c(1,1,6),c(1,1,1))
+params2 = rbind(c(0,1,1),c(1,1,0),c(1,1,1))
+# choose best model with aic
+res = rep(0, 9)
+for (i in 1:3) {
+  for (j in 1:3) {
+    model = arima(train_y, order = params1[i,], seasonal = list(order = params2[j,], period = 7))
+    res[3 * (i-1) + j] = model$aic
+  }
+}
+# best model with (i,j) = (2,3)
+```
+```{r}
+# fit best model, check residuals
+model1 = arima(train_y, order = params1[2,], seasonal = list(order = params2[3,], period=7))
+resid = model1$residuals
+plot(resid)
+abline(h = 0, lty=2)
+acf(resid)
+qqnorm(resid)
+qqline(resid)
+tsdiag(model)
+```
+```{r}
+set.seed(10)
+te = 0.1
+control_idx = sample(seq(1,nrow(test)), nrow(test)/2, replace = FALSE)
+# control outcomes are selected without modification
+control = test[control_idx,]
+# every treatment outcome is applied constant treatment effect 
+treat = test[-control_idx,]
+control_y = log(control$y)
+treat_y = log(treat$y) + te
+plot(train$ds, train_y, xlim = c(min(test$ds) -100, max(test$ds)), type = 'l', col = 'black',ylab = "Log of page visits",xlab ="Time")
+title("Log-scaled page visits")
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, forecast_res$mean, lty = 2, col = 'red')
+#points(test$ds, log(test$y), col = 'red')
+points(control$ds, control_y, col='red')
+points(treat$ds, treat_y, col='green')
+#legend('bottomright', legend = c('train data','fitted train data','preds'), col = c('black','blue','red'), lty = c(1,1,2))
+legend('bottomright', legend = c('train data','fitted train data','Control TS'), col = c('black','blue','red'), lty = c(1,1,2))
+```
+
+```{r}
+# lets try to find the shift t on the time series that minimizes some error function with the treatment outcomes
+loss_fun = function(t, preds, obs, type = 'least squares') {
+  # preds are the expected control outcomes on the treatment days 
+  # obs are the observedtreatment outcome
+  # t is the shift applied to control outcomes to be compared to the observed treatment outcome
+  loss = 0
+  shifted_preds = preds + t
+  if (type == 'least squares') {
+    loss = sum((shifted_preds - obs)^2)
+  } else if (type == 'absolute deviation') {
+    loss = sum(abs(shifted_preds - obs))
+  }
+    else {
+      stop("invalid type parameter")
+  }
+  return(loss)
+}
+```
+
+```{r}
+o = optimize(loss_fun, forecast_res$mean[-control_idx], treat_y, interval = c(-2,2))
+o$minimum
+plot(train$ds, train_y, xlim = c(min(test$ds) -100, max(test$ds)), ylim=c(min(c(control_y,treat_y))-1,max(c(control_y,treat_y))+1),type = 'l', col = 'black',ylab = "Log of page visits",xlab ="Time")
+title("Log-scaled page visits")
+lines(test$ds, forecast_res$mean + te, lty = 2, col = 'purple')
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, forecast_res$mean, lty = 2, col = 'red')
+lines(test$ds, forecast_res$mean + o$minimum, lty = 2, col = 'green')
+#points(test$ds, log(test$y), col = 'red')
+points(control$ds, control_y, col='red')
+points(treat$ds, treat_y, col='green')
+#legend('bottomright', legend = c('train data','fitted train data','preds'), col = c('black','blue','red'), lty = c(1,1,2))
+legend('topleft', legend = c('train data','fitted train data','Control TS','True treatment TS'), col = c('black','blue','red','green','purple'), lty = c(1,1,2,2,2))
+```
+
+
+```{R}
+treat_cnt = forecast_res$mean[-control_idx]
+control_cnt = forecast_res$mean[control_idx] + o$minimum
+diffs = c(treat_y - treat_cnt,control_cnt - control_y)
+c(mean(diffs), mean(treat_y) - mean(control_y))
+sd(diffs)
+```
+
+```{R}
+#two sample t-test that would have been carried out with switchback experiment
+t.test(control_y, treat_y, var.equal = TRUE, alternative='two.sided')
+#paired t-test that can be carried out with time series modelling
+treat_combined = c(treat_y, control_cnt)
+control_combined = c(treat_cnt, control_y)
+t.test(control_combined, treat_combined, paired=TRUE, alternative='two.sided')
+# time series modeling actually underestimates treatment effect a LOT 
+# low variance, but high bias
+# how to adjust for this? 
+# try fitting time series to control outcome as well?
+```
+```{r}
+t_o = optimize(loss_fun, forecast_res$mean[-control_idx], treat_y, interval = c(-2,2))
+c_o = optimize(loss_fun, forecast_res$mean[control_idx], control_y, interval = c(-2,2))
+plot(train$ds, train_y, xlim = c(min(test$ds) -100, max(test$ds)), ylim=c(min(c(control_y,treat_y))-1,max(c(control_y,treat_y))+1),type = 'l', col = 'black',ylab = "Log of page visits",xlab ="Time")
+title("Log-scaled page visits")
+lines(test$ds, forecast_res$mean + te, lty = 2, col = 'purple')
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, forecast_res$mean + c_o$minimum, lty = 2, col = 'red')
+lines(test$ds, forecast_res$mean + t_o$minimum, lty = 2, col = 'green')
+#points(test$ds, log(test$y), col = 'red')
+points(control$ds, control_y, col='red')
+points(treat$ds, treat_y, col='green')
+#legend('bottomright', legend = c('train data','fitted train data','preds'), col = c('black','blue','red'), lty = c(1,1,2))
+legend('topleft', legend = c('train data','fitted train data','Control TS','True treatment TS'), col = c('black','blue','red','green','purple'), lty = c(1,1,2,2,2))
+```
+```{r}
+treat_cnt = forecast_res$mean[-control_idx] + c_o$minimum
+control_cnt = forecast_res$mean[control_idx] + t_o$minimum
+diffs = c(treat_y - treat_cnt,control_cnt - control_y)
+c(mean(diffs), mean(treat_y) - mean(control_y))
+sd(diffs)
+#two sample t-test that would have been carried out with switchback experiment
+t.test(treat_y, control_y, var.equal = TRUE, alternative='two.sided')
+#paired t-test that can be carried out with time series modelling
+treat_combined = c(treat_y, control_cnt)
+control_combined = c(treat_cnt, control_y)
+t.test(treat_combined, control_combined, paired=TRUE, alternative='two.sided')
+# fitting time series to both control and treatment gives less biased results. again, with lower variance compared to regular two sample t-test 
+# tried simulations (seed, te) = (1, 0.1), (1, 0.5), (10, 0.5), (10, 0.1)
+```

@@ -170,10 +170,11 @@ That constant shift is unknown, and needs to be estimated (the treatment effect)
 
 ```{r}
 set.seed(1)
+te = 200
 control_idx = sample(seq(1,nrow(test)), nrow(test)/2, replace = FALSE)
 control = test[control_idx,]
 treat = test[-control_idx,]
-treat$y = treat$y + 200
+treat$y = treat$y + te
 plot(train$ds, train_y, xlim = c(min(test$ds) -100, max(test$ds)), type = 'l', col = 'black',ylab = "Log of page visits",xlab ="Time")
 title("Log-scaled page visits")
 lines(train$ds, fitted(model1), lty = 1, col = 'blue')
@@ -182,6 +183,20 @@ lines(test$ds, forecast_res$mean, lty = 2, col = 'red')
 points(control$ds, log(control$y), col='red')
 lines(test$ds, forecast_res$mean + 0.1, lty = 2, col = 'green')
 points(treat$ds, log(treat$y), col='green')
+#legend('bottomright', legend = c('train data','fitted train data','preds'), col = c('black','blue','red'), lty = c(1,1,2))
+legend('bottomright', legend = c('train data','fitted train data','Control TS', 'Treatment TS'), col = c('black','blue','red','green'), lty = c(1,1,2,2))
+
+```
+
+```{r}
+plot(train$ds,train$y, xlim = c(min(test$ds) -100, max(test$ds)), type = 'l', col = 'black',ylab = "page visits",xlab ="Time")
+title("page visits")
+lines(train$ds, exp(fitted(model1)), lty = 1, col = 'blue')
+lines(test$ds, exp(forecast_res$mean), lty = 2, col = 'red')
+#points(test$ds, log(test$y), col = 'red')
+points(control$ds, control$y, col='red')
+lines(test$ds, exp(forecast_res$mean + 0.1), lty = 2, col = 'green')
+points(treat$ds, treat$y, col='green')
 #legend('bottomright', legend = c('train data','fitted train data','preds'), col = c('black','blue','red'), lty = c(1,1,2))
 legend('bottomright', legend = c('train data','fitted train data','Control TS', 'Treatment TS'), col = c('black','blue','red','green'), lty = c(1,1,2,2))
 
@@ -208,6 +223,7 @@ loss_fun = function(t, preds, obs, type = 'least squares') {
 }
 ```
 ```{R}
+# for log scaled data
 # minimize loss_fun over t
 o = optimize(loss_fun, forecast_res$mean[-control_idx], log(treat$y), interval = c(-2,2))
 # or plot all the loss values across some range of potential t's 
@@ -221,3 +237,31 @@ optimal_t = potential_t[which.min(loss)]
 # problem: the control time series can be shifted to better fit the CONTROL data points as well. 
 # this may inflate the treatment effect (optimal shift for control data is -0.1, optimal shift for treatment data is 0.1, then total treatment effect shifting both control and treatment becomes 0.2, which is twice the true treatment effect)
 ```
+```{r}
+# for original scale data
+o = optimize(loss_fun, exp(forecast_res$mean[-control_idx]), treat$y, interval = c(50,300),'absolute deviation')
+
+```
+Now let's try performing hypothesis test. Paired observations of potential outcomes will be generated using the observed data + estimated counterfactual from the time series. Then, paired t-test of the sample can be performed at each time point
+```{r}
+plot(train$ds,train$y, xlim = c(min(test$ds) -100, max(test$ds)), type = 'l', col = 'black',ylab = "page visits",xlab ="Time")
+title("page visits")
+lines(train$ds, exp(fitted(model1)), lty = 1, col = 'blue')
+lines(test$ds, exp(forecast_res$mean), lty = 2, col = 'red')
+#points(test$ds, log(test$y), col = 'red')
+points(control$ds, control$y, col='red')
+lines(test$ds, exp(forecast_res$mean) + 200, lty = 2, col = 'green')
+points(treat$ds, treat$y, col='green')
+#legend('bottomright', legend = c('train data','fitted train data','preds'), col = c('black','blue','red'), lty = c(1,1,2))
+legend('bottomright', legend = c('train data','fitted train data','Control TS', 'Treatment TS'), col = c('black','blue','red','green'), lty = c(1,1,2,2))
+
+
+```
+
+
+
+
+
+
+
+
