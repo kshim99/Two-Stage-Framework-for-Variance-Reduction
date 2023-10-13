@@ -76,10 +76,11 @@ acf(resid)
 qqnorm(resid)
 qqline(resid)
 tsdiag(model)
+forecast_res = forecast(model1, h = nrow(test), level = 95)
 ```
 ```{r}
 set.seed(10)
-te = 0.1
+te = 0.0
 control_idx = sample(seq(1,nrow(test)), nrow(test)/2, replace = FALSE)
 # control outcomes are selected without modification
 control = test[control_idx,]
@@ -188,7 +189,7 @@ t.test(treat_combined, control_combined, paired=TRUE, alternative='two.sided')
 ```
 ```{R}
 # try to figure out why only optimizing timeseries shift for treatment outcomes is biased
-errors = forecast_res$mean - test_y
+errors = forecast_res$mean - log(test$y)
 plot(errors, type = 'p',ylab = 'estimate - true')
 abline(h=0, col='red',lty=2)
 # the historical timeseries itself was OVERestimating the outcome on average
