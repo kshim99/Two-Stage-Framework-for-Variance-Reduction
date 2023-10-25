@@ -1,0 +1,177 @@
+---
+title: "time_series_forecasting_sim"
+author: "Kyu Min Shim"
+date: "2023-10-19"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(forecast)
+```
+
+## Time Series Forecasting
+```{r}
+#https://www.kaggle.com/datasets/sumanthvrao/daily-climate-time-series-data/?select=DailyDelhiClimateTrain.csv
+current_dir = getwd()
+data_dir1 = file.path(current_dir, "..","AB","DailyDelhiClimateTrain.csv")
+data_dir2 = file.path(current_dir, "..","AB","DailyDelhiClimateTest.csv")
+data1 = read.csv(data_dir1)
+# last row of training is invalid
+data1 = data1[1:nrow(data1)-1,]
+data2 = read.csv(data_dir2)
+data = rbind(data1, data2)
+```
+## select only response and date
+```{r}
+# pick an outcome column
+data = rename(data, ds = date, y = meantemp)
+data$ds = ymd(data$ds)
+data = data[,c("ds","y")]
+# get monthly average because its hard to fit model with period of 300+
+data = data %>% group_by(ds = floor_date(ds,"month")) %>% summarise(y = mean(y))
+```
+```{r}
+# train new time series with just the train data.
+train = data[data$ds < '2016-01-01',]
+test = data[data$ds >= '2016-01-01',]
+plot(train$ds, train$y, xlim = c(min(train$ds), max(test$ds)), ylim = c(min(train$y), max(train$y)), type = 'l', col = 'black', ylab = 'Mean Temperature', xlab = 'Time')
+title('Monthly mean Temperature')
+lines(test$ds, test$y, type='l', col = 'red')
+legend('bottomright', legend = c('train data','test data'), col = c('black','red'), lty = 1)
+```
+```{r}
+# from now, only work with train data
+train_y = train$y
+acf(train_y)
+pacf(train_y)
+# period of 365, decreasing -> d = 1, s = 12, D = 1
+b7data = diff(diff(train_y, difference=1), lag = 12, difference = 1)
+plot(b7data, type = "l")
+acf(b7data)
+pacf(b7data)
+# acf seems stationary, d = 1, D = 1, S = 12
+# (p,q): (1,0), (0,1)
+# (P,Q): (1,0), (0,1)
+```
+```{R}
+# define set of params to try for SARIMA model
+params1 = rbind(c(1,1,0),c(0,1,1),c(1,1,1),c(1,1,2))
+params2 = rbind(c(1,1,0),c(0,1,1),c(1,1,1),c(1,1,0))
+# choose best model with aic
+res = data.frame(matrix(0,nrow=nrow(params1), ncol=nrow(params2)))
+for (i in 1:nrow(params1)) {
+  for (j in 1:nrow(params2)) {
+    model = arima(train_y, order = params1[i,], seasonal = list(order = params2[j,], period = 12))
+    res[i,j] = model$aic
+  }
+}
+res
+```
+```{r}
+# fit best model, check residuals
+model1 = arima(train_y, order = params1[2,], seasonal = list(order = params2[1,], period=12))
+resid = model1$residuals
+plot(resid)
+abline(h = 0, lty=2)
+acf(resid)
+qqnorm(resid)
+qqline(resid)
+tsdiag(model)
+forecast_res = forecast(model1, h = nrow(test), level = 95)
+```
+```{r}
+# lets try to find the shift t on the time series that minimizes some error function with the treatment outcomes
+loss_fun = function(t, preds, obs, type = 'least squares') {
+  # preds are the expected control outcomes on the treatment days 
+  # obs are the observedtreatment outcome
+  # t is the shift applied to control outcomes to be compared to the observed treatment outcome
+  loss = 0
+  shifted_preds = preds + t
+  if (type == 'least squares') {
+    loss = sum((shifted_preds - obs)^2)
+  } else if (type == 'absolute deviation') {
+    loss = sum(abs(shifted_preds - obs))
+  }
+    else {
+      stop("invalid type parameter")
+  }
+  return(loss)
+}
+```
+```{r}
+# plot of model
+set.seed(1)
+te = 5
+search_width = te * 4
+control_idx = sample(seq(1,nrow(test)), nrow(test)/2, replace = FALSE)
+control = test[control_idx,]
+treat = test[-control_idx,]
+control_y = control$y
+treat_y = treat$y + te
+t_o = optimize(loss_fun, forecast_res$mean[-control_idx], treat_y, interval = c(-search_width, search_width))
+c_o = optimize(loss_fun, forecast_res$mean[control_idx], control_y, interval = c(-search_width, search_width))
+plot(train$ds, train_y, xlim = c(min(train$ds), max(test$ds)), ylim=c(min(c(control_y,treat_y))-1,max(c(control_y,treat_y))+1),type = 'l', col = 'black',ylab = "Mean Temperature",xlab ="Time")
+title("Monthly mean temperature")
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, forecast_res$mean + c_o$minimum, lty = 2, col = 'red')
+lines(test$ds, forecast_res$mean + t_o$minimum, lty = 2, col = 'green')
+points(control$ds, control_y, col='red')
+points(treat$ds, treat_y, col='green')
+legend('topleft', legend = c('train data','fitted train data','Control TS','Treatment TS'), col = c('black','blue','red','green'), lty = c(1,1,2,2))
+```
+
+```{r}
+set.seed(1)
+nsim = 100000
+sim_res = data.frame(matrix(nrow=nsim, ncol=4))
+colnames(sim_res) = c('two_sample_est','two_sample_sd','paired_est','paired_sd')
+for (i in 1:nsim) {
+  control_idx = sample(seq(1,nrow(test)), nrow(test)/2, replace = FALSE)
+  control = test[control_idx,]
+  treat = test[-control_idx,]
+  control_y = control$y
+  treat_y = treat$y + te
+  #naive t-test res
+  naive_res = t.test(treat_y, control_y, var.equal = TRUE, alternative = 'two.sided')
+  # paired t-test res
+  t_o = optimize(loss_fun, forecast_res$mean[-control_idx], treat_y, interval = c(-search_width, search_width))
+  c_o = optimize(loss_fun, forecast_res$mean[control_idx], control_y, interval = c(-search_width, search_width))
+  treat_cnt = forecast_res$mean[-control_idx] + c_o$minimum
+  control_cnt = forecast_res$mean[control_idx] + t_o$minimum
+  treat_combined = c(treat_y, control_cnt)
+  control_combined = c(treat_cnt, control_y)
+  paired_res = t.test(treat_combined, control_combined, paired=TRUE, alternative='two.sided')
+  sim_res[i,] = c(naive_res$estimate[1] - naive_res$estimate[2], naive_res$stderr, paired_res$estimate[1], paired_res$stderr)
+}
+```
+```{r}
+left_est = min(c(sim_res$two_sample_est,sim_res$paired_est)) * 1.2
+right_est = max(c(sim_res$two_sample_est,sim_res$paired_est)) * 1.2
+ax = seq(left_est, right_est, length = 40)
+hg_test = hist(sim_res$two_sample_est, breaks = ax, plot=FALSE)
+hg_pest = hist(sim_res$paired_est, breaks = ax, plot=FALSE)
+plot(hg_test, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_test$counts,hg_pest$counts))),main="", xlab="Treatment Effect Estimate")
+plot(hg_pest, col = rgb(0,1,0,1/4), add=TRUE)
+abline(v = te, col = 'red', lty = 2)
+legend('topright', legend = c('two-sample estimates','paired estimates'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4)), pch=c(15,15))
+title(paste('Distribution of Treatment Effect Estimates (',nsim%/%1000,'k Simulations)'))
+sd(sim_res$two_sample_est)
+sd(sim_res$paired_est)
+```
+```{r}
+left_sd = min(c(sim_res$two_sample_sd,sim_res$paired_sd)) * 0.8
+right_sd = max(c(sim_res$two_sample_sd,sim_res$paired_sd)) * 1.2
+ax_sd = seq(left_sd, right_sd, length = 40)
+hg_tsd = hist(sim_res$two_sample_sd, breaks=ax_sd, plot=FALSE)
+hg_psd = hist(sim_res$paired_sd, breaks=ax_sd, plot=FALSE)
+plot(hg_tsd, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_tsd$counts,hg_psd$counts))), main="", xlab = "Std.Err of Estimate")
+plot(hg_psd, col = rgb(0,1,0,1/4), add=TRUE)
+legend('topright', legend = c('two-sample SD','paired SD'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4)), pch=c(15,15))
+title(paste('Distribution of Treatment Effect Std,Err (',nsim%/%1000,'k Simulations)'))
+```
