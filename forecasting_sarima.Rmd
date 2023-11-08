@@ -1,0 +1,377 @@
+---
+title: "forecasting_sarima"
+author: "Kyu Min Shim"
+date: "2023-10-28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(astsa)
+library(forecast)
+```
+
+## Time Series Forecasting
+```{r}
+current_dir = getwd()
+data_dir = file.path(current_dir, "..","AB","page_visits_assignment.csv")
+page_vis = read.csv(data_dir)
+```
+## select only response and date
+```{r}
+# pick an outcome column
+data = rename(page_vis, ds = Date, y = Visits)
+data$ds = mdy(data$ds)
+data = data[,c("ds","y")]
+```
+```{r}
+# train new time series with just the train data.
+train = data[data$ds < '2019-10-01',]
+test = data[data$ds < '2019-11-01' & data$ds >= '2019-10-01',]
+plot(train$ds, log(train$y), xlim = c(min(train$ds), max(test$ds)), ylim = c(min(log(train$y)), max(log(train$y))), type = 'l', col = 'black', ylab = 'Log of page visits', xlab = 'Time')
+title('Log-scaled page visits')
+lines(test$ds, log(test$y), type='l', col = 'red')
+legend('bottomright', legend = c('train data','test data'), col = c('black','red'), lty = 1)
+```
+```{r}
+train_y = log(train$y)
+acf(train_y)
+pacf(train_y)
+# period of 7, decreasing -> d = 1, s = 7, D = 1
+b7data = diff(diff(train_y, difference=1), lag = 7, difference = 1)
+plot(b7data, type = "l")
+acf(b7data)
+pacf(b7data)
+```
+```{R}
+# define set of params to try for SARIMA model
+params1 = rbind(c(0,1,1),c(1,1,6),c(1,1,1))
+params2 = rbind(c(0,1,1),c(1,1,0),c(1,1,1))
+# choose best model with aic
+res = data.frame(matrix(0,nrow=nrow(params1), ncol=nrow(params2)))
+for (i in 1:nrow(params1)) {
+  for (j in 1:nrow(params2)) {
+    model = arima(train_y, order = params1[i,], seasonal = list(order = params2[j,], period = 7))
+    res[i,j] = model$aic
+  }
+}
+res
+```
+```{r}
+opt_p1 = params1[2,]
+opt_p2 = params2[3,]
+m = 7
+model1 = arima(train_y, order = opt_p1, seasonal = list(order = opt_p2, period=m))
+resid = model1$residuals
+plot(resid)
+abline(h = 0, lty=2)
+acf(resid)
+qqnorm(resid)
+qqline(resid)
+tsdiag(model)
+# forecast and predict give same results, but predict gives se from which 
+# we can construct prediction intervals
+forecast_res = forecast(model1, h = nrow(test), level = 95)
+predict_res = predict(model1, n.ahead = nrow(test))
+```
+```{r}
+# plot of predictions
+test_y = log(test$y)
+plot(train$ds, train_y, xlim = c(min(test$ds) - 100, max(test$ds)),
+     ylim = c(min(c(test_y)) - 1 , max(c(train_y, test_y)) + 1), type = 'l', 
+     col = 'black', ylab = 'log of page visits', xlab = 'time')
+title("Log of page visits")
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, predict_res$pred, lty = 2, col = 'red')
+lines(test$ds, predict_res$pred + qnorm(0.975) * predict_res$se, lty = 2, col = 'grey')
+lines(test$ds, predict_res$pred - qnorm(0.975) * predict_res$se, lty = 2, col = 'grey')
+points(test$ds, test_y, col = 'red')
+#legend('topleft', legend = c('train data','fitted train data','predicted test data', 'prediction interval'), col = c('black','blue','red','grey'), lty = c(1,1,2,2))
+
+```
+
+```{r}
+# lets try to find the shift t on the time series that minimizes some error function with the treatment outcomes
+loss_fun = function(t, preds, obs, type = 'mse') {
+  # preds are the expected control outcomes on the treatment days 
+  # obs are the observedtreatment outcome
+  # t is the shift applied to control outcomes to be compared to the observed treatment outcome
+  loss = 0
+  shifted_preds = preds + t
+  if (type == 'mse') {
+    loss = mean((shifted_preds - obs)^2)
+  } else if (type == 'mad') {
+    loss = mean(abs(shifted_preds - obs))
+  }
+    else {
+      stop("invalid type parameter")
+  }
+  return(loss)
+}
+```
+```{r}
+# optimize predictions, and move prediction intervals around accordingly
+opt = optimize(loss_fun, predict_res$pred, test_y, interval = c(-2,2))
+unbiased_pred = predict_res$pred + opt$minimum
+plot(train$ds, train_y, xlim = c(min(test$ds) - 100, max(test$ds)),
+     ylim = c(min(c(test_y)) - 1 , max(c(train_y, test_y)) + 1), type = 'l', 
+     col = 'black', ylab = 'log of page visits', xlab = 'time')
+title("Log of page visits")
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, unbiased_pred, lty = 2, col = 'red')
+lines(test$ds, unbiased_pred + qnorm(0.975) * predict_res$se, lty = 2, col = 'grey')
+lines(test$ds, unbiased_pred - qnorm(0.975) * predict_res$se, lty = 2, col = 'grey')
+points(test$ds, test_y, col = 'red')
+
+```
+```{r}
+# randomly select half of test, give prediction interval for each 
+set.seed(1)
+te = 0.5
+search_width = te * 2 + 1
+control_idx = seq(1,nrow(test))[runif(nrow(test)) > 0.5]
+control = test[control_idx,]
+treat = test[-control_idx,]
+control_y = log(control$y)
+treat_y = log(treat$y) + te
+t_o = optimize(loss_fun, predict_res$pred[-control_idx], treat_y, interval = c(-search_width, search_width))
+c_o = optimize(loss_fun, predict_res$pred[control_idx], control_y, interval = c(-search_width, search_width))
+unbiased_treat = predict_res$pred + t_o$minimum
+unbiased_control = predict_res$pred + c_o$minimum
+plot(train$ds, train_y, xlim = c(min(test$ds) - 100, max(test$ds)),
+     ylim = c(min(c(test_y)) - 1 , max(c(train_y, test_y)) + 1), type = 'l', 
+     col = 'black', ylab = 'log of page visits', xlab = 'time')
+title("Log of page visits")
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, unbiased_control, lty = 2, col = 'red')
+lines(test$ds, unbiased_control + qnorm(0.975) * predict_res$se, lty = 2, col = rgb(1,0,0,0.5))
+lines(test$ds, unbiased_control - qnorm(0.975) * predict_res$se, lty = 2, col = rgb(1,0,0,0.5))
+points(control$ds, control_y, col = 'red')
+lines(test$ds, unbiased_treat, lty = 2, col = 'green')
+lines(test$ds, unbiased_treat + qnorm(0.975) * predict_res$se, lty = 2, col = rgb(0,1,0,0.5))
+lines(test$ds, unbiased_treat - qnorm(0.975) * predict_res$se, lty = 2, col = rgb(0,1,0,0.5))
+points(treat$ds, treat_y, col = 'green')
+```
+
+```{r}
+control_combined = c(control_y, unbiased_control[-control_idx])
+treat_combined = c(unbiased_treat[control_idx], treat_y)
+#var(control_combined) + var(treat_combined) - 2*cov(control_combined, treat_combined)
+# each diff has a variance -> se^2 of the estimated counterfactual
+# so it should be var(d) = se^2, var(d_bar) = sum(se^2) / n
+paired_test = t.test(treat_combined, control_combined, paired = TRUE)
+paired_test$stderr
+#var(control_combined - treat_combined) / nrow(test)
+#(t_o$objective + c_o$objective) / nrow(test) 
+#(t_o$objective * length(treat_y) + c_o$objective * length(control_y) + sum(predict_res$se^2))/nrow(test)^2 
+#sqrt((t_o$objective * length(treat_y) + c_o$objective * length(control_y) + sum(predict_res$se^2))/nrow(test)^2 - 2 * cov(treat_combined, control_combined) / nrow(test))
+# by fitting predictions to observations, we have a proxy for the variance of treatment obs and control obs 
+# since difference is taken between observed (which we suppose would have variance = mse of the fitted pred) and counterfactual (which is an estimate, with variance = mse) then var(obs - est) = var(obs) + var(est) 
+est_treat = predict_res$pred[control_idx] + t_o$minimum
+est_control = predict_res$pred[-control_idx] + c_o$minimum
+sqrt(sum(predict_res$se^2) / nrow(test)^2 
+                - 2*cov(treat_y, est_control) * length(treat_y)/nrow(test)^2
+                - 2*cov(control_y, est_treat) * length(control_y)/nrow(test)^2)
+sqrt(2*sum(predict_res$se^2) / nrow(test)^2 - 2*cov(control_combined,treat_combined)/nrow(test))
+sqrt((sum(predict_res$se^2) + model1$sigma2 * nrow(test))/nrow(test)^2)
+#hist_covar = cov(train_y, fitted(model1))
+est_var = (1/nrow(test)^2) * (nrow(test) * model1$sigma2 + sum(predict_res$se^2))
+sqrt(est_var)
+```
+```{R}
+poly_coef = function(p1, p2) {
+  # if p1 is a vector coefficient of a polynomial, it has length equal to its degree + 1
+  # order of coefficient goes from constant to highest degree term 
+  m = outer(p1,p2)
+  return(as.vector(tapply(m, row(m) + col(m), sum)))
+}
+```
+```{r}
+# playing with coefficients
+# first, extract different coef:
+ar_coef = model1$coef[1:opt_p1[1]]
+ma_coef = model1$coef[(opt_p1[1]+1):(opt_p1[1]+opt_p1[3])]
+dif_term = opt_p1[2]
+sdif_term = opt_p2[2]
+sar_coef = model1$coef[(opt_p1[1]+1+opt_p1[3]):(opt_p1[1]+opt_p1[3]+opt_p2[1])]
+sma_coef = model1$coef[(opt_p1[1]+opt_p1[3]+opt_p2[1]+1):(opt_p1[1]+opt_p1[3]+opt_p2[1]+opt_p2[3])]
+var_coef = model1$var.coef
+
+# build ar_poly, sar_poly, ma_poly, sma_poly taking into account of the difference terms
+
+dif_poly = rep(0, dif_term+1)
+sdif_poly = rep(0, sdif_term+1)
+for (i in 0:dif_term) {
+  dif_poly[i+1] = choose(dif_term,i) * ((-1)**(i))
+}
+for(i in 0:sdif_term) {
+  sdif_poly[i+1] = choose(sdif_term,i) * ((-1)**(i))
+}
+
+ar_poly = poly_coef(c(1,ar_coef),c(dif_poly))
+sar_poly = poly_coef(c(1,sar_coef),c(sdif_poly))
+ma_poly = c(1,ma_coef)
+sma_poly = c(1,sma_coef)
+sar_poly_conv = c(1)
+sma_poly_conv = c(1)
+for (i in 2:length(sar_poly)) {
+  sar_poly_conv = c(sar_poly_conv, rep(0,m-1), sar_poly[i])
+}
+for (i in 2:length(sma_poly)) {
+  sma_poly_conv = c(sma_poly_conv, rep(0, m-1), sma_poly[i])
+}
+AR = poly_coef(ar_poly,sar_poly_conv)
+MA = poly_coef(ma_poly, sma_poly_conv)
+# now we have coefficient of equivalent arma model
+# convert this into ma model, with number of coefficents equal to the number of forecasting periods
+MA_coef_forecast = ARMAtoMA(AR,MA,nrow(test))
+SE_est = rep(0, nrow(test))
+sigma2_est = model1$sigma2
+for (i in 1:nrow(test)) {
+  SE_est[i] = sqrt(sigma2_est * (1 + sum((MA_coef_forecast[1:i])^2)))
+}
+SE_est
+predict_res$se
+# this is so much bigger... 
+```
+```{R}
+# maybe sampling is wrong. Should not be taking half but flipping coin randomly
+# to decide whetehr to apply treatment each day. 
+set.seed(1)
+te = 0.5
+search_width = te * 2 + 1
+sim_num = 1000
+sim_res = data.frame(matrix(0,nrow = sim_num, ncol = 6))
+colnames(sim_res) = c("two_est","two_se","pair_est","pair_se","pair_se_est1","pair_se_est2")
+hist_cov = cov(fitted(model1), train_y)
+for (i in 1:sim_num) {
+  #control_idx = seq(1,nrow(test))[runif(nrow(test)) > 0.5]
+  control_idx = sort(sample(seq(1,nrow(test)),floor(nrow(test)/2), replace = FALSE))
+  control = test[control_idx,]
+  treat = test[-control_idx,]
+  control_y = log(control$y)
+  treat_y = log(treat$y) + te
+  t_o = optimize(loss_fun, predict_res$pred[-control_idx], treat_y, interval = c(-search_width, search_width))
+  c_o = optimize(loss_fun, predict_res$pred[control_idx], control_y, interval = c(-search_width, search_width))
+  est_treat = predict_res$pred[control_idx] + t_o$minimum
+  est_control = predict_res$pred[-control_idx] + c_o$minimum
+  control_combined = c(control_y, est_control)
+  treat_combined = c(est_treat, treat_y)
+  se_est1 = sqrt((1/nrow(test)^2) * (nrow(test) * (model1$sigma2 + sum(predict_res$se[1:2]^2))))
+  se_est2 = sqrt((1/nrow(test)^2) * (2*nrow(test) * model1$sigma2 + nrow(control)*t_o$objective + nrow(treat)*c_o$objective))
+  #se_est2 = sqrt((1/nrow(test)^2) * (nrow(test) * 2 * model1$sigma2))
+  two_res = t.test(treat_y, control_y, var.equal = TRUE, alternative = 'two.sided')
+  pair_res = t.test(treat_combined, control_combined, pair = TRUE, alternative = 'two.sided')
+  sim_res[i,] = c(two_res$estimate[1] - two_res$estimate[2], two_res$stderr, 
+                  pair_res$estimate, pair_res$stderr, se_est1, se_est2)
+}
+```
+
+```{r}
+left_est = min(c(sim_res$two_est,sim_res$pair_est)) * 0.8
+right_est = max(c(sim_res$two_est,sim_res$pair_est)) * 1.2
+ax = seq(left_est, right_est, length = 40)
+hg_test = hist(sim_res$two_est, breaks=ax, plot=FALSE)
+hg_pest = hist(sim_res$pair_est, breaks=ax, plot=FALSE)
+plot(hg_test, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_test$counts,hg_pest$counts))),main="", xlab="Treatment Effect Estimate")
+plot(hg_pest, col = rgb(0,1,0,1/4), add=TRUE)
+abline(v = te, col = 'red', lty = 2)
+legend('topright', legend = c('two-sample estimates','paired estimates'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4)), pch=c(15,15))
+title(paste('Distribution of Treatment Effect Estimates (', sim_num %/% 1000,'k Simulations)'))
+sd(sim_res$two_est)
+sd(sim_res$pair_est)
+summary(sim_res)
+```
+```{r}
+left_sd = min(c(sim_res$two_se,sim_res$pair_se)) * 0.5
+right_sd = max(c(sim_res$two_se,sim_res$pair_se)) * 1.5
+ax_sd = seq(left_sd, right_sd, length = 40)
+hg_tsd = hist(sim_res$two_se, breaks=ax_sd, plot=FALSE)
+hg_psd = hist(sim_res$pair_se, breaks=ax_sd, plot=FALSE)
+hg_est1 = hist(sim_res$pair_se_est1, breaks=ax_sd, plot = FALSE)
+hg_est2 = hist(sim_res$pair_se_est2, breaks=ax_sd, plot = FALSE)
+#hg_est3 = hist(sim_res$pair_se_est3, breaks=ax_sd, plot= FALSE)
+plot(hg_tsd, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_tsd$counts,hg_psd$counts))), main="", xlab = "Std.Err of Estimate")
+plot(hg_psd, col = rgb(0,1,0,1/4), add=TRUE)
+plot(hg_est1, col = rgb(1,0,0,1/4), add = TRUE)
+plot(hg_est2, col = rgb(0.5,0.5,0,1/4), add = TRUE)
+#plot(hg_est3, col = rgb(0,0.5,0.5,1/4), add = TRUE)
+#legend('topright', legend = c('two-sample SD','paired SD','est SD1', 'est SD2','est SD3'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4), rgb(1,0,0,1/4),rgb(0.5,0.5,0,1/4),rgb(0,0.5,0.5,1/4)), pch=c(15,15,15,15,15))
+legend('topright', legend = c('two-sample SD','paired SD','est SD1','est SD2'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4), rgb(1,0,0,1/4), rgb(0.5,0.5,0,1/4)), pch=c(15,15,15,15))
+abline(v = sd(sim_res$pair_est), col = rgb(0,1,0), lty = 2)
+abline(v = sd(sim_res$two_est), col = rgb(0,0,1), lty = 2)
+title(paste('Distribution of Treatment Effect Std.Err (', sim_num %/% 1000,'k Simulations)'))
+```
+
+```{r}
+set.seed(1000)
+y1 = rnorm(10,0,1)
+y2 = rnorm(10,te,1)
+two_sample = t.test(y1,y2,var.equal = TRUE)
+y1bar = mean(y1)
+y2bar = mean(y2)
+y1_double = c(y1,rep(y1bar,n))
+y2_double = c(rep(y2bar,n),y2)
+paired = t.test(y1_double, y2_double, paired=TRUE)
+sd(y1_double-y2_double)/sqrt(2*n)
+paired$stderr
+```
+```{r}
+# very simple example with constant imputation of counterfactual
+set.seed(5)
+n = 10
+te = 2
+sim_num = 1000
+sim_res = data.frame(matrix(nrow=sim_num, ncol = 4))
+colnames(sim_res) = c('two_est','two_se', 'pair_est','pair_se')
+for (i in 1:sim_num){
+  y1 = rnorm(10,0,1)
+  y2 = rnorm(10,te,1)
+  two_sample = t.test(y1,y2,var.equal = TRUE)
+  y1bar = mean(y1)
+  y2bar = mean(y2)
+  y1_double = c(y1,rep(y1bar,n))
+  y2_double = c(rep(y2bar,n),y2)
+  paired = t.test(y1_double, y2_double, paired=TRUE)
+  sim_res[i,] = c(two_sample$estimate[1] - two_sample$estimate[2], two_sample$stderr,
+                  paired$estimate[1], paired$stderr)
+}
+```
+```{r}
+left_est = min(c(sim_res$two_est,sim_res$pair_est)) * 1.2
+right_est = max(c(sim_res$two_est,sim_res$pair_est,0)) * 1.2
+ax = seq(left_est, right_est, length = 40)
+hg_test = hist(sim_res$two_est, breaks=ax, plot=FALSE)
+hg_pest = hist(sim_res$pair_est, breaks=ax, plot=FALSE)
+plot(hg_test, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_test$counts,hg_pest$counts))),main="", xlab="Treatment Effect Estimate")
+plot(hg_pest, col = rgb(0,1,0,1/4), add=TRUE)
+abline(v = -te, col = 'red', lty = 2)
+legend('topright', legend = c('two-sample estimates','paired estimates'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4)), pch=c(15,15))
+title(paste('Distribution of Treatment Effect Estimates (', sim_num %/% 1000,'k Simulations)'))
+sd(sim_res$two_est)
+sd(sim_res$pair_est)
+summary(sim_res)
+```
+```{R}
+left_sd = min(c(sim_res$two_se,sim_res$pair_se)) * 0.5
+right_sd = max(c(sim_res$two_se,sim_res$pair_se)) * 1.5
+ax_sd = seq(left_sd, right_sd, length = 40)
+hg_tsd = hist(sim_res$two_se, breaks=ax_sd, plot=FALSE)
+hg_psd = hist(sim_res$pair_se, breaks=ax_sd, plot=FALSE)
+hg_psd2 = hist(sim_res$pair_se*2, breaks=ax_sd, plot=FALSE)
+plot(hg_tsd, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_tsd$counts,hg_psd$counts))), main="", xlab = "Std.Err of Estimate")
+plot(hg_psd, col = rgb(0,1,0,1/4), add=TRUE)
+plot(hg_psd2, col = rgb(1,0,0,1/4), add=TRUE)
+legend('topright', legend = c('two-sample SD','paired SD','double paired SD'), 
+       col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4), rgb(1,0,0,1/4)), pch=c(15,15,15,15))
+abline(v = sd(sim_res$pair_est), col = rgb(0,1,0), lty = 2)
+abline(v = sd(sim_res$two_est), col = rgb(0,0,1), lty = 2)
+title(paste('Distribution of Treatment Effect Std.Err (', sim_num %/% 1000,'k Simulations)'))
+mean(sim_res$two_se)
+mean(sim_res$pair_se)
+```

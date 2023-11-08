@@ -1,0 +1,230 @@
+---
+title: "se_test"
+author: "Kyu Min Shim"
+date: "2023-10-27"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{R}
+# in order to maintain correlation between x and y (due to time confounding), 
+# simulate y by applying randomly generated treatment effect
+set.seed(0)
+n = 10
+v = 2
+te = rnorm(n,5,v/4)
+x = rnorm(n,0,v)
+y = x + te
+# var equal is actually not true, but suppose it is since var of te is small
+t.test(x,y,var.equal=TRUE, alternative='two.sided')
+t.test(x,y,paired=TRUE, alternative='two.sided')
+```
+```{R}
+set.seed(100)
+nsim = 100000
+const_te = 5
+v = 2
+sim_res = data.frame(matrix(NA,nrow = nsim, ncol = 3))
+colnames(sim_res) = c("paired_est","paired_stderr", "correlation")
+for (i in 1:nsim) {
+  x = rnorm(n,0,v)
+  te = rnorm(n,const_te,v/4)
+  y = x + te
+  t = t.test(x,y,paired=TRUE,alternative='two.sided')
+  sim_res[i,] = c(t$estimate[1], t$stderr, cor(x,y))
+}
+```
+
+```{r}
+# simulating correlated pairs do not result in halfed standard estimates. In fact,
+# the distribution of standard errors and actual standard deviation of mean estimates 
+# line up very well
+hist(sim_res$paired_est)
+hist(sim_res$paired_stderr)
+s_ser = sd(sim_res$paired_est)
+t_ser = sqrt((v/4)^2/n)
+print(paste(c('simulated standard error of treatment effect:', s_ser)))
+print(paste(c('theoretical standard error of treatment effect:', t_ser)))
+# note var(d) = var(x - y) = var(x - (x + te)) = var(te)
+# var of mean(d) = var(te) / n = var(te) / 10 = 0.025
+# var of estimates = sd(sim_res$paired_est) ^ 2 = 0.0232
+# these line up well 
+# higher the nubmer of simulations, the closer the simulation standard error to the theoretical
+```
+
+```{r}
+# suspect the halving of standard error is coming from changing control/treatment assignments
+# but this means that the standard dev of estimates is already taking into account
+# of the model dependence, specifically variance related to the different forecasts that is fitted
+# to the randomly selected half of the test data 
+# var(mean(d)) = var(d) / n
+# var(d) = var(treat - control) = var((actual_treat, estimated_treat) - (estimated_control, actual_control)) = var((yt_t - f(t), f(t) + te - yc_t))
+# note that var(yt_t) = var(yc_t) and te is constant
+# so var(d) = var(yt_t - f(t)) = var(f(t) + te - yc_t)
+# yt_t and f(t) are not independepent since f(t) is predictions of historical data and 
+# yt_t is an actual observation 
+# so if yt_t follows some underlying process and f(t) estimates such process, then cov(yt_t, f(t)) is high
+# var(yt_t - f(t)) 
+# what if i fix points in control and treatment, and apply some variation to their values
+# so fix control points, treatment points, and apply norm(0,1) to each one so that
+# in each iteration, we are essentially taking a sample of control and treatment aligned with its
+# trend/seasonality 
+# this now becomes highly dependent on which points are chosen to be in which group
+# if not evenly distributed over time, biased fit of ocunterfactuals
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(forecast)
+```
+
+## Time Series Forecasting
+```{r}
+#https://www.kaggle.com/datasets/sumanthvrao/daily-climate-time-series-data/?select=DailyDelhiClimateTrain.csv
+current_dir = getwd()
+data_dir1 = file.path(current_dir, "..","AB","DailyDelhiClimateTrain.csv")
+data_dir2 = file.path(current_dir, "..","AB","DailyDelhiClimateTest.csv")
+data1 = read.csv(data_dir1)
+# last row of training is invalid
+data1 = data1[1:nrow(data1)-1,]
+data2 = read.csv(data_dir2)
+data = rbind(data1, data2)
+```
+## select only response and date
+```{r}
+# pick an outcome column
+data = rename(data, ds = date, y = meantemp)
+data$ds = ymd(data$ds)
+data = data[,c("ds","y")]
+# get monthly average because its hard to fit model with period of 300+
+data = data %>% group_by(ds = floor_date(ds,"month")) %>% summarise(y = mean(y))
+```
+```{r}
+# train new time series with just the train data.
+train = data[data$ds < '2016-01-01',]
+test = data[data$ds >= '2016-01-01',]
+plot(train$ds, train$y, xlim = c(min(train$ds), max(test$ds)), ylim = c(min(train$y), max(train$y)), type = 'l', col = 'black', ylab = 'Mean Temperature', xlab = 'Time')
+title('Monthly mean Temperature')
+lines(test$ds, test$y, type='l', col = 'red')
+legend('bottomright', legend = c('train data','test data'), col = c('black','red'), lty = 1)
+```
+```{r}
+# from now, only work with train data
+train_y = train$y
+model1 = arima(train_y, order = c(0,1,1), seasonal = list(order = c(1,1,0), period=12))
+forecast_res = forecast(model1, h = nrow(test), level = 95)
+```
+```{r}
+# lets try to find the shift t on the time series that minimizes some error function with the treatment outcomes
+loss_fun = function(t, preds, obs, type = 'least squares') {
+  # preds are the expected control outcomes on the treatment days 
+  # obs are the observedtreatment outcome
+  # t is the shift applied to control outcomes to be compared to the observed treatment outcome
+  loss = 0
+  shifted_preds = preds + t
+  if (type == 'least squares') {
+    loss = sum((shifted_preds - obs)^2)
+  } else if (type == 'absolute deviation') {
+    loss = sum(abs(shifted_preds - obs))
+  }
+    else {
+      stop("invalid type parameter")
+  }
+  return(loss)
+}
+```
+```{R}
+set.seed(1)
+const_te = 0
+search_width = const_te * 2 + 1
+v = 1
+control_idx = seq(1,nrow(test),2)
+control = test[control_idx,]
+treat = test[-control_idx,]
+#random_effect_c = rnorm(nrow(control),0,v)
+#random_effect_t = rnorm(nrow(control),const_te,v)
+control_y = control$y 
+treat_y = treat$y + const_te
+t.test(treat_y, control_y, var.equal = TRUE, alternative='two.sided')
+t_o = optimize(loss_fun, forecast_res$mean[-control_idx], treat_y, interval = c(-search_width, search_width))
+c_o = optimize(loss_fun, forecast_res$mean[control_idx], control_y, interval = c(-search_width, search_width))
+treat_cnt = forecast_res$mean[-control_idx] + c_o$minimum
+control_cnt = forecast_res$mean[control_idx] + t_o$minimum
+treat_combined = c(treat_y, control_cnt)
+control_combined = c(treat_cnt, control_y)
+t.test(treat_combined, control_combined, paired=TRUE, alternative='two.sided')
+plot(train$ds, train_y, xlim = c(min(train$ds), max(test$ds)), ylim=c(min(c(control_y,treat_y))-5,max(c(control_y,treat_y))+5),type = 'l', col = 'black',ylab = "Mean Temperature",xlab ="Time")
+title("Monthly mean temperature")
+lines(train$ds, fitted(model1), lty = 1, col = 'blue')
+lines(test$ds, forecast_res$mean + c_o$minimum, lty = 2, col = 'red')
+lines(test$ds, forecast_res$mean + t_o$minimum, lty = 2, col = 'green')
+points(control$ds, control_y, col='red')
+points(treat$ds, treat_y, col='green')
+legend('topleft', legend = c('train data','fitted train data','Control TS','Treatment TS'), col = c('black','blue','red','green'), lty = c(1,1,2,2))
+```
+
+
+```{r}
+set.seed(7)
+const_te = 0
+search_width = const_te * 2 + 1
+v = 1/2
+nsim = 1000
+sim_res = data.frame(matrix(nrow=nsim, ncol=6))
+colnames(sim_res) = c('two_sample_est','two_sample_sd','paired_est','paired_sd','t_o','c_o')
+control_idx = seq(1,nrow(test),2)
+control = test[control_idx,]
+treat = test[-control_idx,]
+for (i in 1:nsim) {
+  random_effect_c = rnorm(nrow(control),0,v)
+  random_effect_t = rnorm(nrow(control),const_te,v)
+  control_y = control$y + random_effect_c
+  treat_y = treat$y + random_effect_t
+  #naive t-test res
+  naive_res = t.test(treat_y, control_y, var.equal = TRUE, alternative = 'two.sided')
+  # paired t-test res
+  t_o = optimize(loss_fun, forecast_res$mean[-control_idx], treat_y, interval = c(-search_width, search_width))
+  c_o = optimize(loss_fun, forecast_res$mean[control_idx], control_y, interval = c(-search_width, search_width))
+  treat_cnt = forecast_res$mean[-control_idx] + c_o$minimum
+  control_cnt = forecast_res$mean[control_idx] + t_o$minimum
+  treat_combined = c(treat_y, control_cnt)
+  control_combined = c(treat_cnt, control_y)
+  paired_res = t.test(treat_combined, control_combined, paired=TRUE, alternative='two.sided')
+  sim_res[i,] = c(naive_res$estimate[1] - naive_res$estimate[2], naive_res$stderr, paired_res$estimate[1], paired_res$stderr,t_o$minimum, c_o$minimum)
+}
+```
+```{r}
+left_est = min(c(sim_res$two_sample_est,sim_res$paired_est)) * 1.2
+right_est = max(c(sim_res$two_sample_est,sim_res$paired_est)) * 1.2
+ax = seq(left_est, right_est, length = 40)
+hg_test = hist(sim_res$two_sample_est, breaks = ax, plot=FALSE)
+hg_pest = hist(sim_res$paired_est, breaks = ax, plot=FALSE)
+plot(hg_test, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_test$counts,hg_pest$counts))),main="", xlab="Treatment Effect Estimate")
+plot(hg_pest, col = rgb(0,1,0,1/4), add=TRUE)
+abline(v = const_te, col = 'red', lty = 2)
+legend('topright', legend = c('two-sample estimates','paired estimates'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4)), pch=c(15,15))
+title(paste('Distribution of Treatment Effect Estimates (',nsim%/%1000,'k Simulations)'))
+sd(sim_res$two_sample_est)
+sd(sim_res$paired_est)
+```
+```{r}
+left_sd = min(c(sim_res$two_sample_sd,sim_res$paired_sd)) * 0.8
+right_sd = max(c(sim_res$two_sample_sd,sim_res$paired_sd)) * 1.2
+ax_sd = seq(left_sd, right_sd, length = 40)
+hg_tsd = hist(sim_res$two_sample_sd, breaks=ax_sd, plot=FALSE)
+hg_psd = hist(sim_res$paired_sd, breaks=ax_sd, plot=FALSE)
+plot(hg_tsd, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_tsd$counts,hg_psd$counts))), main="", xlab = "Std.Err of Estimate")
+plot(hg_psd, col = rgb(0,1,0,1/4), add=TRUE)
+legend('topright', legend = c('two-sample SD','paired SD'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4)), pch=c(15,15))
+title(paste('Distribution of Treatment Effect Std,Err (',nsim%/%1000,'k Simulations)'))
+```
+
+
