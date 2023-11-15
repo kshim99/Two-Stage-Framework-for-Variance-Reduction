@@ -240,14 +240,12 @@ predict_res$se
 # this is so much bigger... 
 ```
 ```{R}
-# maybe sampling is wrong. Should not be taking half but flipping coin randomly
-# to decide whetehr to apply treatment each day. 
-set.seed(1)
+set.seed(5)
 te = 0.5
 search_width = te * 2 + 1
 sim_num = 1000
-sim_res = data.frame(matrix(0,nrow = sim_num, ncol = 6))
-colnames(sim_res) = c("two_est","two_se","pair_est","pair_se","pair_se_est1","pair_se_est2")
+sim_res = data.frame(matrix(0,nrow = sim_num, ncol = 7))
+colnames(sim_res) = c("two_est","two_se","pair_est","pair_se","pair_se_est1","pair_se_est2","pair_se_est3")
 hist_cov = cov(fitted(model1), train_y)
 for (i in 1:sim_num) {
   #control_idx = seq(1,nrow(test))[runif(nrow(test)) > 0.5]
@@ -263,12 +261,12 @@ for (i in 1:sim_num) {
   control_combined = c(control_y, est_control)
   treat_combined = c(est_treat, treat_y)
   se_est1 = sqrt((1/nrow(test)^2) * (nrow(test) * (model1$sigma2 + sum(predict_res$se[1:2]^2))))
-  se_est2 = sqrt((1/nrow(test)^2) * (2*nrow(test) * model1$sigma2 + nrow(control)*t_o$objective + nrow(treat)*c_o$objective))
-  #se_est2 = sqrt((1/nrow(test)^2) * (nrow(test) * 2 * model1$sigma2))
+  se_est2 = sqrt(var(predict_res$pred[-control_idx] - treat_y)/length(treat_y) + var(predict_res$pred[control_idx] - control_y)/length(control_y))
+  se_est3 = sqrt(var(predict_res$pred[-control_idx] - treat_y)/length(treat_y) + var(predict_res$pred[control_idx] - control_y)/length(control_y) + 2*model1$sigma2)
   two_res = t.test(treat_y, control_y, var.equal = TRUE, alternative = 'two.sided')
   pair_res = t.test(treat_combined, control_combined, pair = TRUE, alternative = 'two.sided')
   sim_res[i,] = c(two_res$estimate[1] - two_res$estimate[2], two_res$stderr, 
-                  pair_res$estimate, pair_res$stderr, se_est1, se_est2)
+                  pair_res$estimate, pair_res$stderr, se_est1, se_est2, se_est3)
 }
 ```
 
@@ -289,7 +287,7 @@ summary(sim_res)
 ```
 ```{r}
 left_sd = min(c(sim_res$two_se,sim_res$pair_se)) * 0.5
-right_sd = max(c(sim_res$two_se,sim_res$pair_se)) * 1.5
+right_sd = max(c(sim_res$two_se,sim_res$pair_se)) * 1.2
 ax_sd = seq(left_sd, right_sd, length = 40)
 hg_tsd = hist(sim_res$two_se, breaks=ax_sd, plot=FALSE)
 hg_psd = hist(sim_res$pair_se, breaks=ax_sd, plot=FALSE)
@@ -302,7 +300,7 @@ plot(hg_est1, col = rgb(1,0,0,1/4), add = TRUE)
 plot(hg_est2, col = rgb(0.5,0.5,0,1/4), add = TRUE)
 #plot(hg_est3, col = rgb(0,0.5,0.5,1/4), add = TRUE)
 #legend('topright', legend = c('two-sample SD','paired SD','est SD1', 'est SD2','est SD3'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4), rgb(1,0,0,1/4),rgb(0.5,0.5,0,1/4),rgb(0,0.5,0.5,1/4)), pch=c(15,15,15,15,15))
-legend('topright', legend = c('two-sample SD','paired SD','est SD1','est SD2'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4), rgb(1,0,0,1/4), rgb(0.5,0.5,0,1/4)), pch=c(15,15,15,15))
+legend('topright', legend = c('two-sample SD','paired SD','est SD1','est SD2','est SD3'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4), rgb(1,0,0,1/4), rgb(0.5,0.5,0,1/4), rgb(0,0.5,0.5,1/4)), pch=c(15,15,15,15,15))
 abline(v = sd(sim_res$pair_est), col = rgb(0,1,0), lty = 2)
 abline(v = sd(sim_res$two_est), col = rgb(0,0,1), lty = 2)
 title(paste('Distribution of Treatment Effect Std.Err (', sim_num %/% 1000,'k Simulations)'))
