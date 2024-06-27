@@ -1,0 +1,474 @@
+---
+title: "Bootstrap_sample_gen_stock"
+author: "Kyu Min Shim"
+date: "2023-11-27"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(astsa)
+library(forecast)
+library(MASS)
+library(reshape2)
+library(arfima)
+```
+
+```{r}
+current_dir = getwd()
+data_dir = file.path(current_dir, "..","AB","yahoo_stock.csv")
+stock = read.csv(data_dir)
+```
+## select only response and date
+```{r}
+# pick an outcome column
+data = rename(stock, ds = Date, y = Close)
+data$ds = ymd(data$ds)
+data = data[,c("ds","y")]
+```
+```{r}
+# train new time series with just the train data.
+train = data[data$ds < '2020-10-01',]
+test = data[data$ds >= '2020-10-01',]
+plot(train$ds, train$y, xlim = c(min(train$ds), max(test$ds)), ylim = c(min(train$y), max(train$y)), type = 'l', col = 'black', ylab = 'Stock Price', xlab = 'Time')
+title('Yahoo Stock Price')
+lines(test$ds, test$y, type='l', col = 'red')
+legend('bottomright', legend = c('train data','test data'), col = c('black','red'), lty = 1)
+```
+```{r}
+# from now, only work with train data
+train_y = train$y
+acf(train_y)
+pacf(train_y)
+# period of 0, decreasing -> d = 1, s = 0, D = 0
+b7data = diff(train_y, difference=1)
+plot(b7data, type = "l")
+acf(b7data)
+pacf(b7data)
+# acf seems stationary, d = 1, D = 0, S = 0
+# (p,q): (0,1), (0,2), (0,8), (0,11), (1,1), (1,2), (1,8), (1,11)
+# (P,Q): (0,0)
+```
+```{R}
+# define set of params to try for SARIMA model
+params1 = rbind(c(0,1,1),c(0,1,2),c(0,1,8),c(0,1,11),c(1,1,1),c(1,1,2),c(1,1,8),c(1,1,11))
+params2 = rbind(c(0,0,0))
+# choose best model with aic
+res = data.frame(matrix(0,nrow=nrow(params1), ncol=nrow(params2)))
+for (i in 1:nrow(params1)) {
+  for (j in 1:nrow(params2)) {
+    model = arima(train_y, order = params1[i,], seasonal = list(order = params2[j,], period = 0))
+    res[i,j] = model$aic
+  }
+}
+res
+```
+```{r}
+opt_p1 = params1[8,]
+# seasonal params not needed
+opt_p2 = params2[0,]
+m = 0
+model1 = arima(train_y, order = opt_p1)
+resid = model1$residuals
+# forecast and predict give same results, but predict gives se from which 
+# we can construct prediction intervals
+forecast_res = forecast(model1, h = nrow(test), level = 95)
+predict_res = predict(model1, n.ahead = nrow(test))
+```
+
+```{r}
+# generate samples of parameter using mean est and covar matrix
+# for each sample of coefficients, check if its invertible. If not, sample until an invertible sample is achieved
+set.seed(5)
+num_sample = 10
+bs_preds = data.frame(matrix(0, nrow=num_sample, ncol = nrow(test)))
+for (i in 1:num_sample) {
+  coef_sample = mvrnorm(1, model1$coef, model1$var.coef)
+  while (!(IdentInvertQ(phi = coef_sample[1], theta = coef_sample[2:12]))) {
+    coef_sample = mvrnorm(1, model1$coef, model1$var.coef)
+  }
+  mdl = arima(train_y, order=opt_p1, fixed = coef_sample)
+  bs_preds[i,] = forecast(mdl, h=nrow(test), level=95)$mean
+}
+plot_sample = melt(bs_preds)
+plot_sample$rowid = 1:(num_sample)
+ggplot(plot_sample, aes(variable, value, group=factor(rowid))) + 
+  geom_line(aes(color=factor(rowid)))
+```
+```{r}
+# generate samples of parameter using mean est and covar matrix
+set.seed(5)
+num_sample = 1000
+bs_preds = data.frame(matrix(0, nrow=num_sample, ncol = nrow(test)))
+for (i in 1:num_sample) {
+  coef_sample = mvrnorm(1, model1$coef, model1$var.coef)
+  while (!(IdentInvertQ(phi = coef_sample[1], theta = coef_sample[2:12]))) {
+    coef_sample = mvrnorm(1, model1$coef, model1$var.coef)
+  }
+  mdl = arima(train_y, order=opt_p1, fixed = coef_sample)
+  bs_preds[i,] = forecast(mdl, h=nrow(test), level=95)$mean
+}
+
+# no omits, but still invertible warning? 
+clean_bs_preds = na.omit(bs_preds)
+```
+
+```{r}
+# lets try to find the shift t on the time series that minimizes some error function with the treatment outcomes
+loss_fun = function(t, preds, obs, type = 'mse') {
+  # preds are the expected control outcomes on the treatment days 
+  # obs are the observedtreatment outcome
+  # t is the shift applied to control outcomes to be compared to the observed treatment outcome
+  loss = 0
+  shifted_preds = preds + t
+  if (type == 'mse') {
+    loss = mean((shifted_preds - obs)^2)
+  } else if (type == 'mad') {
+    loss = mean(abs(shifted_preds - obs))
+  }
+    else {
+      stop("invalid type parameter")
+  }
+  return(loss)
+}
+```
+
+- run simulation with the predictions from various coefficient sets 
+- fix treatment assignment
+- of course, this means that two sample estimates and se are fixed 
+```{r}
+set.seed(5)
+te = 100
+search_width = te * 2 + 1
+sim_num = nrow(clean_bs_preds)
+sim_res = data.frame(matrix(0,nrow = sim_num, ncol = 5))
+colnames(sim_res) = c("two_est","two_se","pair_est","pair_se","pair_se_est1")
+# fix treatment assignment
+control_idx = sort(sample(seq(1,nrow(test)), floor(nrow(test)/2), replace = FALSE))
+control = test[control_idx,]
+treat = test[-control_idx,]
+control_y = control$y
+treat_y = treat$y + te
+for (i in 1:sim_num) {
+  bs_preds = unlist(clean_bs_preds[i,])
+  t_o = optimize(loss_fun, bs_preds[-control_idx], treat_y, interval = c(-search_width, search_width))
+  c_o = optimize(loss_fun, bs_preds[control_idx], control_y, interval = c(-search_width, search_width))
+  est_treat = bs_preds[control_idx] + t_o$minimum
+  est_control = bs_preds[-control_idx] + c_o$minimum
+  control_combined = c(control_y, est_control)
+  treat_combined = c(est_treat, treat_y)
+  se_est = sqrt(var(bs_preds[-control_idx] - treat_y)/length(treat_y) + var(bs_preds[control_idx] - control_y)/length(control_y))
+  two_res = t.test(treat_y, control_y, var.equal = TRUE, alternative = 'two.sided')
+  pair_res = t.test(treat_combined, control_combined, pair = TRUE, alternative = 'two.sided')
+  sim_res[i,] = c(two_res$estimate[1] - two_res$estimate[2], two_res$stderr, 
+                  pair_res$estimate, pair_res$stderr, se_est)
+}
+```
+```{r}
+left_est = min(c(sim_res$two_est,sim_res$pair_est)) * 0.8
+right_est = max(c(sim_res$two_est,sim_res$pair_est)) * 1.2
+ax = seq(left_est, right_est, length = 40)
+hg_test = hist(sim_res$two_est, breaks=ax, plot=FALSE)
+hg_pest = hist(sim_res$pair_est, breaks=ax, plot=FALSE)
+plot(hg_test, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_test$counts,hg_pest$counts))),main="", xlab="Treatment Effect Estimate")
+plot(hg_pest, col = rgb(0,1,0,1/4), add=TRUE)
+abline(v = te, col = 'red', lty = 2)
+legend('topright', legend = c('two-sample estimates','paired estimates'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4)), pch=c(15,15))
+title(paste('Distribution of Treatment Effect Estimates (', sim_num ,' Simulations)'))
+sd(sim_res$two_est)
+sd(sim_res$pair_est)
+summary(sim_res)
+```
+```{r}
+left_sd = min(c(sim_res$two_se,sim_res$pair_se)) * 0.8
+right_sd = max(c(sim_res$two_se,sim_res$pair_se)) * 1.2
+ax_sd = seq(left_sd, right_sd, length = 40)
+hg_tsd = hist(sim_res$two_se, breaks=ax_sd, plot=FALSE)
+hg_psd = hist(sim_res$pair_se, breaks=ax_sd, plot=FALSE)
+hg_est1 = hist(sim_res$pair_se_est1, breaks=ax_sd, plot = FALSE)
+plot(hg_tsd, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_tsd$counts,hg_psd$counts))), main="", xlab = "Std.Err of Estimate")
+plot(hg_psd, col = rgb(0,1,0,1/4), add=TRUE)
+plot(hg_est1, col = rgb(1,0,0,1/4), add = TRUE)
+legend('topright', legend = c('two-sample SD','paired SD','est SD'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4), rgb(1,0,0,1/4)), pch=c(15,15,15))
+abline(v = sd(sim_res$pair_est), col = rgb(0,1,0), lty = 2)
+abline(v = sd(sim_res$two_est), col = rgb(0,0,1), lty = 2)
+title(paste('Distribution of Treatment Effect Std.Err (', sim_num, ' Simulations)'))
+```
+```{r}
+plot_sample = melt(clean_bs_preds)
+plot_sample$rowid = 1:(nrow(clean_bs_preds))
+ggplot(plot_sample, aes(variable, value, group=factor(rowid))) + 
+  geom_line(aes(color=factor(rowid))) +
+theme(legend.position='none')
+
+```
+```{r}
+# same thing but randomize treatment assignment for each prediction
+set.seed(5)
+te = 10
+sim_num = nrow(clean_bs_preds)
+sim_res = data.frame(matrix(0,nrow = sim_num, ncol = 8))
+colnames(sim_res) = c("two_est","two_se","pair_est","pair_se","pair_se_est1","pair_se_est2", 'alpha1','alpha0')
+for (i in 1:sim_num) {
+  control_idx = sort(sample(seq(1,nrow(test)), floor(nrow(test)/2), replace = FALSE))
+  control = test[control_idx,]
+  treat = test[-control_idx,]
+  control_y = control$y
+  treat_y = treat$y + rnorm(nrow(treat), te, 20)
+  # keeping predictions fixed, only changing treatment assignment to compare effect on variance of treatment effect estimate
+  bs_preds = unlist(clean_bs_preds[i,])
+  t_o = mean(treat_y - bs_preds[-control_idx]) #optimize(loss_fun, bs_preds[-control_idx], treat_y, interval = c(-search_width, search_width))
+  c_o = mean(control_y - bs_preds[control_idx]) #optimize(loss_fun, bs_preds[control_idx], control_y, interval = c(-search_width, search_width))
+  error1 = var(treat_y - bs_preds[-control_idx] - t_o)
+  error0 = var(control_y - bs_preds[control_idx] - c_o)
+  est_treat = bs_preds[control_idx] + t_o
+  est_control = bs_preds[-control_idx] + c_o
+  control_combined = c(control_y, est_control)
+  treat_combined = c(est_treat, treat_y)
+  se_est = sqrt(error1/length(treat_y) + error0/length(control_y))
+  se_est2 = sqrt(se_est^2 + 2 * sqrt(error1/length(treat_y))*sqrt(error0/length(control_y)))
+  two_res = t.test(treat_y, control_y, var.equal = TRUE, alternative = 'two.sided')
+  pair_res = t.test(treat_combined, control_combined, pair = TRUE, alternative = 'two.sided')
+  sim_res[i,] = c(two_res$estimate[1] - two_res$estimate[2], two_res$stderr, 
+                  pair_res$estimate, pair_res$stderr, se_est, se_est2, t_o, c_o)
+}
+```
+
+- can still observe reduced variance compared to two-sample estimates and unbiasedness
+```{r}
+left_est = min(c(sim_res$two_est,sim_res$pair_est)) * 1.2
+right_est = max(c(sim_res$two_est,sim_res$pair_est)) * 1.2
+ax = seq(left_est, right_est, length = 40)
+hg_test = hist(sim_res$two_est, breaks=ax, plot=FALSE)
+hg_pest = hist(sim_res$pair_est, breaks=ax, plot=FALSE)
+plot(hg_test, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_test$counts,hg_pest$counts))),main="", xlab="Treatment Effect Estimate")
+plot(hg_pest, col = rgb(0,1,0,1/4), add=TRUE)
+abline(v = te, col = 'red', lty = 2)
+legend('topright', legend = c('two-sample estimates','paired estimates'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4)), pch=c(15,15))
+title(paste('Distribution of Treatment Effect Estimates (', sim_num ,' Simulations)'))
+sd(sim_res$two_est)
+sd(sim_res$pair_est)
+summary(sim_res)
+```
+- standard error estimates align well with the observed standard error in treatment effect estimates
+```{r}
+left_sd = min(c(sim_res$two_se,sim_res$pair_se)) * 0.5
+right_sd = max(c(sim_res$two_se,sim_res$pair_se)) * 1.2
+ax_sd = seq(left_sd, right_sd, length = 40)
+hg_tsd = hist(sim_res$two_se, breaks=ax_sd, plot=FALSE)
+hg_psd = hist(sim_res$pair_se, breaks=ax_sd, plot=FALSE)
+hg_est1 = hist(sim_res$pair_se_est1, breaks=ax_sd, plot = FALSE)
+plot(hg_tsd, col = rgb(0,0,1,1/4), ylim = c(0, max(c(hg_tsd$counts,hg_psd$counts))), main="", xlab = "Std.Err of Estimate")
+plot(hg_psd, col = rgb(0,1,0,1/4), add=TRUE)
+plot(hg_est1, col = rgb(1,0,0,1/4), add = TRUE)
+legend('topright', legend = c('two-sample SD','paired SD','Est SD'), col = c(rgb(0,0,1,1/4),rgb(0,1,0,1/4), rgb(1,0,0,1/4)), pch=c(15,15,15))
+abline(v = sd(sim_res$pair_est), col = rgb(0,1,0), lty = 2)
+abline(v = sd(sim_res$two_est), col = rgb(0,0,1), lty = 2)
+title(paste('Distribution of Treatment Effect Std.Err (', sim_num, ' Simulations)'))
+```
+
+```{r}
+# check if decomposition lines up
+
+# set up all the variables
+set.seed(1)
+control_idx = sort(sample(seq(1,nrow(test)), floor(nrow(test)/2), replace = FALSE))
+control = test[control_idx,]
+treat = test[-control_idx,]
+control_y = control$y
+treat_y = treat$y + te
+n1 = length(treat_y)
+n0 = length(control_y)
+n = n1 + n0
+alpha1 = mean(treat_y - forecast_res$mean[-control_idx])
+alpha0 = mean(control_y - forecast_res$mean[control_idx])
+var_y0 = var(control_y)
+var_y1 = var(treat_y)
+resid_1 = treat_y - (forecast_res$mean[-control_idx] + alpha1)
+resid_0 = control_y - (forecast_res$mean[control_idx] + alpha0)
+
+```
+
+```{r}
+# decompose two sample estimator variance
+two_sample_var = var(treat_y)/n1 + var(control_y)/n0
+decomposed_two_sample1 = var(resid_1)/n1 + var(resid_0)/n0 + var(forecast_res$mean[-control_idx])/n1 + var(forecast_res$mean[control_idx])/n0
+decomposed_two_sample2 = decomposed_two_sample1 + 2 * cov(resid_1, forecast_res$mean[-control_idx])/n1 + 2 * cov(resid_0, forecast_res$mean[control_idx])/n0
+# note this is variance, above we have been using sd
+two_sample_res = c(two_sample_var, decomposed_two_sample1, decomposed_two_sample2)
+# rescale to sd
+two_sample_res^0.5
+# compared to t-test result
+t.test(treat_y, control_y, var.equal = TRUE)$stderr
+# slight deviation because pooled_var neq var(y1bar) + var(y0bar) when n1 neq n0. but if n1 = n0, then pooled var = var(y1bar) + var(y0bar) can be shown using pooled var formula
+```
+```{R}
+#paired estimate var
+
+# first generate counterfactuals and pair them up
+treat_y_comb = c(treat_y, forecast_res$mean[control_idx] + alpha1)
+control_y_comb = c(forecast_res$mean[-control_idx] + alpha0, control_y)
+
+paired_test_var = var(treat_y_comb - control_y_comb)/n # var of mean differences
+decomposed_paired = (n1 - 1)/(n*(n-1))*var(resid_1) + (n0-1)/(n*(n-1))*var(resid_0)
+# variance 
+paired_test_res = c(paired_test_var, decomposed_paired)
+# sd
+paired_test_res^0.5
+# paired test result
+t.test(treat_y_comb, control_y_comb, paired=TRUE)$stderr
+```
+```{r}
+#using counterfactuals, but considering the randomness associated with respect to alpha (have not considered randomness associated with f or problem of model dependence)
+ac_res = var(resid_1)/n1 + var(resid_0)/n0
+ac_res
+#sd
+ac_res^0.5
+
+# note the relationship with paired estimate var
+c(ac_res^0.5, paired_test_res^0.5*2)
+```
+```{r}
+set.seed(1)
+te = 50
+sim_num = nrow(clean_bs_preds)
+sim_res = data.frame(matrix(0,nrow = sim_num, ncol = 10))
+colnames(sim_res) = c("two_est","two_se","pair_est","pair_se","pair_se_est1","pair_se_est2", 'alpha1','alpha0','error1','error0')
+for (i in 1:sim_num) {
+  control_idx = sort(sample(seq(1,nrow(test)), floor(nrow(test)/2), replace = TRUE))
+  treat_idx = sort(sample(seq(1,nrow(test)), floor(nrow(test)/2), replace = TRUE))
+  control = test[control_idx,]
+  treat = test[treat_idx,]
+  control_y = control$y
+  treat_y = treat$y + te
+  bs_preds = unlist(clean_bs_preds[i,])
+  t_o = mean(treat_y - bs_preds[treat_idx]) 
+  c_o = mean(control_y - bs_preds[control_idx]) 
+  error1 = var(treat_y - bs_preds[treat_idx] - t_o)
+  error0 = var(control_y - bs_preds[control_idx] - c_o)
+  est_treat = bs_preds[control_idx] + t_o
+  est_control = bs_preds[treat_idx] + c_o
+  control_combined = c(control_y, est_control)
+  treat_combined = c(est_treat, treat_y)
+  se_est = sqrt(error1/length(treat_y) + error0/length(control_y))
+  se_est2 = sqrt(se_est^2 + 2 * sqrt(error1/length(treat_y))*sqrt(error0/length(control_y)))
+  two_res = t.test(treat_y, control_y, var.equal = TRUE, alternative = 'two.sided')
+  pair_res = t.test(treat_combined, control_combined, pair = TRUE, alternative = 'two.sided')
+  sim_res[i,] = c(two_res$estimate[1] - two_res$estimate[2], two_res$stderr, 
+                  pair_res$estimate, pair_res$stderr, se_est, se_est2, t_o, c_o,
+                  error1,error0)
+}
+```
+
+```{R}
+# variance of alpha1 test
+# without considering variability of fhat
+paste0("var of alpha1: ", var(sim_res$alpha1))
+summary(sim_res$error1/floor(nrow(test)/2))
+
+# considering variability of fhat as mean prediction variance
+pred_var = mean(apply(clean_bs_preds,2,var))
+paste0("average var of predictions: ", pred_var)
+
+# variance of alpha0 test
+# without considering variability of fhat
+paste0("var of alpha0: ", var(sim_res$alpha0))
+summary(sim_res$error0/floor(nrow(test)/2))
+
+# considering variability of fhat as mean prediction variance
+paste0("var of alpha1 and alpha0 with prediction var accounted for")
+summary(sim_res$error1/floor(nrow(test)/2) + pred_var/floor(nrow(test)/2))
+summary(sim_res$error0/floor(nrow(test)/2) + pred_var/floor(nrow(test)/2))
+
+# testing with model residual instead of mean prediction variance
+paste0("prediction model residual variance: ", model1$sigma2)
+paste0("var of alpha1 and alpha0 with prediction var as model residual variance")
+summary(sim_res$error1/floor(nrow(test)/2) + model1$sigma2/floor(nrow(test)/2))
+summary(sim_res$error0/floor(nrow(test)/2) + model1$sigma2/floor(nrow(test)/2))
+
+# compare to total treatment effect var
+paste0("TE variance from simulation: ", var(sim_res$pair_est))
+paste0("TE variance estimate with no model variance")
+summary(sim_res$error1/floor(nrow(test)/2) + sim_res$error0/floor(nrow(test)/2))
+paste0("TE variance estimate with mean prediction variance")
+summary(sim_res$error1/floor(nrow(test)/2) + sim_res$error0/floor(nrow(test)/2)
+        + pred_var/floor(nrow(test)/2) + pred_var/floor(nrow(test)/2))
+paste0("TE vairance estimate with model residual variance")
+summary(sim_res$error1/floor(nrow(test)/2) + sim_res$error0/floor(nrow(test)/2)
+        + model1$sigma2/floor(nrow(test)/2) + model1$sigma2/floor(nrow(test)/2))
+```
+```{r}
+set.seed(1)
+te = 50
+sim_num = nrow(clean_bs_preds)
+sim_res = data.frame(matrix(0,nrow = sim_num, ncol = 10))
+colnames(sim_res) = c("two_est","two_se","pair_est","pair_se","pair_se_est1","pair_se_est2", 'alpha1','alpha0','error1','error0')
+for (i in 1:sim_num) {
+  control_idx = sort(sample(seq(1,nrow(test)), floor(nrow(test)/2), replace = TRUE))
+  treat_idx = sort(sample(seq(1,nrow(test)), floor(nrow(test)/2), replace = TRUE))
+  control = test[control_idx,]
+  treat = test[treat_idx,]
+  control_y = control$y
+  treat_y = treat$y + te
+  bs_preds = unlist(clean_bs_preds[1,])
+  t_o = mean(treat_y - bs_preds[treat_idx]) 
+  c_o = mean(control_y - bs_preds[control_idx]) 
+  error1 = var(treat_y - bs_preds[treat_idx] - t_o)
+  error0 = var(control_y - bs_preds[control_idx] - c_o)
+  est_treat = bs_preds[control_idx] + t_o
+  est_control = bs_preds[treat_idx] + c_o
+  control_combined = c(control_y, est_control)
+  treat_combined = c(est_treat, treat_y)
+  se_est = sqrt(error1/length(treat_y) + error0/length(control_y))
+  se_est2 = sqrt(se_est^2 + 2 * sqrt(error1/length(treat_y))*sqrt(error0/length(control_y)))
+  two_res = t.test(treat_y, control_y, var.equal = TRUE, alternative = 'two.sided')
+  pair_res = t.test(treat_combined, control_combined, pair = TRUE, alternative = 'two.sided')
+  sim_res[i,] = c(two_res$estimate[1] - two_res$estimate[2], two_res$stderr, 
+                  pair_res$estimate, pair_res$stderr, se_est, se_est2, t_o, c_o,
+                  error1,error0)
+}
+```
+
+```{R}
+# variance of alpha1 test
+# without considering variability of fhat
+paste0("var of alpha1: ", var(sim_res$alpha1))
+summary(sim_res$error1/floor(nrow(test)/2))
+
+# considering variability of fhat as mean prediction variance
+pred_var = mean(apply(clean_bs_preds,2,var))
+paste0("average var of predictions: ", pred_var)
+
+# variance of alpha0 test
+# without considering variability of fhat
+paste0("var of alpha0: ", var(sim_res$alpha0))
+summary(sim_res$error0/floor(nrow(test)/2))
+
+# considering variability of fhat as mean prediction variance
+paste0("var of alpha1 and alpha0 with prediction var accounted for")
+summary(sim_res$error1/floor(nrow(test)/2) + pred_var/floor(nrow(test)/2))
+summary(sim_res$error0/floor(nrow(test)/2) + pred_var/floor(nrow(test)/2))
+
+# testing with model residual instead of mean prediction variance
+paste0("prediction model residual variance: ", model1$sigma2)
+paste0("var of alpha1 and alpha0 with prediction var as model residual variance")
+summary(sim_res$error1/floor(nrow(test)/2) + model1$sigma2/floor(nrow(test)/2))
+summary(sim_res$error0/floor(nrow(test)/2) + model1$sigma2/floor(nrow(test)/2))
+
+# compare to total treatment effect var
+paste0("TE variance from simulation: ", var(sim_res$pair_est))
+paste0("TE variance estimate with no model variance")
+summary(sim_res$error1/floor(nrow(test)/2) + sim_res$error0/floor(nrow(test)/2))
+paste0("TE variance estimate with mean prediction variance")
+summary(sim_res$error1/floor(nrow(test)/2) + sim_res$error0/floor(nrow(test)/2)
+        + pred_var/floor(nrow(test)/2) + pred_var/floor(nrow(test)/2))
+paste0("TE vairance estimate with model residual variance")
+summary(sim_res$error1/floor(nrow(test)/2) + sim_res$error0/floor(nrow(test)/2)
+        + model1$sigma2/floor(nrow(test)/2) + model1$sigma2/floor(nrow(test)/2))
+```
+when varying predictions, TE variance is 709, when not varying predictions, TE variance is 697. average variance in prediction is 27.57. varying predictions does add more randomness to TE variance, but not in the most explainable way? 
