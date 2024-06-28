@@ -14,7 +14,7 @@ treat_col = 'red'
 control_col = 'blue'
 pre_col = 'grey'
 # when plotting results for different models, use a dictionary of colors, and use different color for different models
-colors = {'two': 'gray', 'reg': 'goldenrod', 'ml': 'cadetblue', 'mix': 'slateblue'}
+colors = {'two': 'gray', 'reg': 'goldenrod', 'ml': 'cadetblue', 'mix': 'slateblue', 'quad': 'firebrick'}
 dpi = 200
 
 def gen_base_data():
@@ -42,7 +42,8 @@ def gen_exp_data(x,y,n,te):
     treat_y = y[treat_idx] + te
     
     # return control x, y, and treatment x, y
-    return {'control_x': control_x, 'control_y': control_y, 'treat_x': treat_x, 'treat_y': treat_y}
+    return {'control_x': control_x, 'control_y': control_y, 'control_idx': control_idx, 
+            'treat_x': treat_x, 'treat_y': treat_y, 'treat_idx': treat_idx}
 
 def gen_counter_data(x, exp_data, mod, alpha_1, alpha_0):
     # x is the basis x so we can generate counterfactual model across the entire domain 
@@ -57,6 +58,8 @@ def gen_counter_data(x, exp_data, mod, alpha_1, alpha_0):
     treat_mod = mod(x) + alpha_1
     control_cfs = mod(control_x) + alpha_1 # these are estimated TREATMENT outcomes for CONTROL observations
     treat_cfs = mod(treat_x) + alpha_0 # these are estimated CONTROL outcomes for TREATMENT observations
+    
+    del control_x, treat_x
     return {'control_mod': control_mod, 'treat_mod': treat_mod, 'control_cfs': control_cfs, 'treat_cfs': treat_cfs, 'x': x}
 
 
@@ -156,49 +159,49 @@ def gen_pre_exp_data_poor():
     pre_fit = BSpline(*tck)(fine_x) # we can plot the pre-exp model over the fine domain 
     return {'fine_x': fine_x, 'x_pre': x_pre, 'y_pre': y_pre, 'pre_fit': pre_fit, 'model': BSpline(*tck)}
 
+# define functions  for getting ATE and SE for each model
+def const_est(exp_data):
+    # constant model
+    two_est = np.mean(exp_data['treat_y']) - np.mean(exp_data['control_y'])
+    two_se = (np.var(exp_data['treat_y'],ddof=1)/len(exp_data['treat_y']) + np.var(exp_data['control_y'],ddof=1)/len(exp_data['control_y']))**0.5
+    return [two_est, two_se]
+
+def regress_est(exp_data):
+    # regression model
+    treatxvar = np.var(exp_data['treat_x'],ddof=1)
+    controlxvar = np.var(exp_data['control_x'],ddof=1)
+    treatxcov = np.cov(exp_data['treat_x'],exp_data['treat_y'],ddof=1)[0,1]
+    controlxcov = np.cov(exp_data['control_x'],exp_data['control_y'],ddof=1)[0,1]
+    beta = (treatxcov + controlxcov)/(treatxvar + controlxvar)
+    alpha_1 = np.mean(exp_data['treat_y']) - np.mean(exp_data['treat_x']) * beta
+    alpha_0 = np.mean(exp_data['control_y']) - np.mean(exp_data['control_x']) * beta
+    reg_est = alpha_1 - alpha_0
+    reg_se = (np.var(exp_data['treat_y'] - exp_data['treat_x'] * beta, ddof=1)/len(exp_data['treat_y']) + 
+                np.var(exp_data['control_y'] - exp_data['control_x'] * beta, ddof=1)/len(exp_data['control_y']))**0.5
+    del treatxvar, controlxvar, treatxcov, controlxcov, beta, alpha_1, alpha_0
+    return [reg_est, reg_se]
+
+def flex_ml_est(exp_data, pre_exp_model):
+    # ml model
+    # make a copy of it with outcomes replaced with residual outcomes
+    copy_data = exp_data.copy()
+    copy_data['control_y'] = exp_data['control_y'] - pre_exp_model(exp_data['control_x'])
+    copy_data['treat_y'] = exp_data['treat_y'] - pre_exp_model(exp_data['treat_x'])
+    ml_est, ml_se = const_est(copy_data)
+    del copy_data
+    return [ml_est, ml_se]
+
+def secondary_est(exp_data, pre_exp_model):
+    # ml with secondary linear adjustment
+    copy_data = exp_data
+    copy_data['control_y'] = exp_data['control_y'] - pre_exp_model(exp_data['control_x'])
+    copy_data['treat_y'] = exp_data['treat_y'] - pre_exp_model(exp_data['treat_x'])
+    s_est, s_se = regress_est(copy_data)
+    del copy_data
+    return [s_est, s_se]
+
 def gen_distribution(base_data, pre_exp_model, sample_sizes, sim_num, te):
     # simulating multiple experiments for all 4 models
-
-    # first define a helper function for getting ATE and SE for each model
-    def const_est(exp_data):
-        # constant model
-        two_est = np.mean(exp_data['treat_y']) - np.mean(exp_data['control_y'])
-        two_se = (np.var(exp_data['treat_y'],ddof=1)/len(exp_data['treat_y']) + np.var(exp_data['control_y'],ddof=1)/len(exp_data['control_y']))**0.5
-        return [two_est, two_se]
-    
-    def regress_est(exp_data):
-        # regression model
-        treatxvar = np.var(exp_data['treat_x'],ddof=1)
-        controlxvar = np.var(exp_data['control_x'],ddof=1)
-        treatxcov = np.cov(exp_data['treat_x'],exp_data['treat_y'],ddof=1)[0,1]
-        controlxcov = np.cov(exp_data['control_x'],exp_data['control_y'],ddof=1)[0,1]
-        beta = (treatxcov + controlxcov)/(treatxvar + controlxvar)
-        alpha_1 = np.mean(exp_data['treat_y']) - np.mean(exp_data['treat_x']) * beta
-        alpha_0 = np.mean(exp_data['control_y']) - np.mean(exp_data['control_x']) * beta
-        reg_est = alpha_1 - alpha_0
-        reg_se = (np.var(exp_data['treat_y'] - exp_data['treat_x'] * beta, ddof=1)/len(exp_data['treat_y']) + 
-                  np.var(exp_data['control_y'] - exp_data['control_x'] * beta, ddof=1)/len(exp_data['control_y']))**0.5
-        return [reg_est, reg_se]
-    
-    def flex_ml_est(exp_data):
-        # ml model
-        # make a copy of it with outcomes replaced with residual outcomes
-        copy_data = exp_data.copy()
-        copy_data['control_y'] = exp_data['control_y'] - pre_exp_model(exp_data['control_x'])
-        copy_data['treat_y'] = exp_data['treat_y'] - pre_exp_model(exp_data['treat_x'])
-        ml_est, ml_se = const_est(copy_data)
-        del copy_data
-        return [ml_est, ml_se]
-    
-    def secondary_est(exp_data):
-        # ml with secondary linear adjustment
-        copy_data = exp_data
-        copy_data['control_y'] = exp_data['control_y'] - pre_exp_model(exp_data['control_x'])
-        copy_data['treat_y'] = exp_data['treat_y'] - pre_exp_model(exp_data['treat_x'])
-        s_est, s_se = regress_est(copy_data)
-        del copy_data
-        return [s_est, s_se]
-
     # begin simulating experiments
     res = {}
     x = base_data['x']
@@ -208,9 +211,9 @@ def gen_distribution(base_data, pre_exp_model, sample_sizes, sim_num, te):
         n = sample_sizes[key]
         for _ in range(sim_num):
             exp_data = gen_exp_data(x,y,n,te)
-            temp.append(np.concatenate([const_est(exp_data), regress_est(exp_data), flex_ml_est(exp_data), secondary_est(exp_data)]))
+            temp.append(np.concatenate([const_est(exp_data), regress_est(exp_data), flex_ml_est(exp_data, pre_exp_model), secondary_est(exp_data, pre_exp_model)]))
         res[key] = pd.DataFrame(temp, columns = ['two_est','two_se','reg_est','reg_se','ml_est','ml_se','s_est','s_se']) 
-    
+        del temp
     # return the result which is a dictionary of dataframes
     return res
 
@@ -274,8 +277,3 @@ def plot_SE_distribution(res, save_name = ""):
         if save_name:
             plt.savefig(save_name + "_" + str(key) + "_se.png")
         plt.show()
-
-
-
-
-
