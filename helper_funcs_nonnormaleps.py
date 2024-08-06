@@ -16,7 +16,7 @@ pre_col = 'grey'
 # when plotting results for different models, use a dictionary of colors, and use different color for different models
 colors = {'two': 'gray', 'reg': 'goldenrod', 'ml': 'cadetblue', 'mix': 'slateblue', 'quad': 'firebrick'}
 dpi = 200
-error_var = 1
+error_var = 10
 
 def gen_base_data():
     
@@ -140,23 +140,23 @@ def plot_instance(in_exp_dict, x_label, y_label, cf_dict = {}, pre_exp_dict = {}
         print("ATE: ", ATE, ", SE: ", SE)
 
 
-def gen_pre_exp_data():
+def gen_pre_exp_data(smoothing_param = 15):
     # generate pre-experiment data
     fine_x = np.arange(69.5,100.5,0.1) # this is the fine domain over which we can plot the pre-exp function we fit. We widen up the domain to avoid extreme edge behaviours for more sensible visualization
     x_pre = np.array(random.sample(list(fine_x), 100)) # this generates a sample of pre-exp x
     x_pre.sort() # need sorting for BSpline
     y_pre = 2*np.sin(x_pre*2) + 0.2*((x_pre - 70)) + np.random.exponential(error_var,len(x_pre)) * 0.5 # this generates a sample of pre-exp y
-    tck = splrep(x_pre, y_pre, s=15) # this fits a spline with smoothing param of s to our pre-exp sample data
+    tck = splrep(x_pre, y_pre, s=smoothing_param) # this fits a spline with smoothing param of s to our pre-exp sample data
     pre_fit = BSpline(*tck)(fine_x) # we can plot the pre-exp model over the fine domain 
     return {'fine_x': fine_x, 'x_pre': x_pre, 'y_pre': y_pre, 'pre_fit': pre_fit, 'model': BSpline(*tck)}
 
-def gen_pre_exp_data_poor():
+def gen_pre_exp_data_poor(smoothing_param = 15):
     # generate pre-experiment data
     fine_x = np.arange(69.5,100.5,0.1) # this is the fine domain over which we can plot the pre-exp function we fit. We widen up the domain to avoid extreme edge behaviours for more sensible visualization
     x_pre = np.array(random.sample(list(fine_x), 100)) # this generates a sample of pre-exp x
     x_pre.sort() # need sorting for BSpline
     y_pre = 2*np.sin(x_pre*2) + np.random.exponential(error_var,len(x_pre)) * 0.5 # this generates a sample of pre-exp y
-    tck = splrep(x_pre, y_pre, s=15) # this fits a spline with smoothing param of s to our pre-exp sample data
+    tck = splrep(x_pre, y_pre, s=smoothing_param) # this fits a spline with smoothing param of s to our pre-exp sample data
     pre_fit = BSpline(*tck)(fine_x) # we can plot the pre-exp model over the fine domain 
     return {'fine_x': fine_x, 'x_pre': x_pre, 'y_pre': y_pre, 'pre_fit': pre_fit, 'model': BSpline(*tck)}
 
