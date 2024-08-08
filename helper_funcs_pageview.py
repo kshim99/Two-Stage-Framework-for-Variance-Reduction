@@ -130,8 +130,9 @@ def plot_ATE_distribution_q(res, te, sample_sizes, save_name = ""):
         plt.hist(sim_res['q_est'], bins = bins_range, color = colors['quad'], label=r"$\hat{\tau}_{q}$",alpha=0.5)
 
         # add labels
+        label = r"$\tau = " + str(te) + "$"
         top_loc = plt.gca().get_ylim()[1]
-        plt.text(te, top_loc, r"$\tau = 2$",verticalalignment='top')
+        plt.text(te, top_loc, label, verticalalignment='top')
         plt.axvline(te, color = 'black', linestyle='-',alpha=0.5)
         plt.ylabel("Frequency")
         plt.xlabel(r"$\hat{\tau}$")
