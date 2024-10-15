@@ -278,3 +278,93 @@ def plot_SE_distribution(res, save_name = ""):
         if save_name:
             plt.savefig(save_name + "_" + str(key) + "_se.png")
         plt.show()
+
+def plot_ATE_boxplots(res, te, sample_sizes, save_name=""):
+    for key in res:
+        plt.figure(dpi=dpi)
+        sim_res = res[key]
+        
+        # Prepare data for boxplots
+        data = [sim_res['two_est'], sim_res['reg_est'], sim_res['ml_est'], sim_res['s_est']]
+        labels = [r"$\hat{\tau}_d$", r"$\hat{\tau}_r$", r"$\hat{\tau}_{f}$", r"$\hat{\tau}_{s}$"]
+        colors_list = [colors['two'], colors['reg'], colors['ml'], colors['mix']]
+        
+        # Create boxplots
+        box = plt.boxplot(data, patch_artist=True, labels=labels)
+        
+        # Color the boxplots
+        for patch, color in zip(box['boxes'], colors_list):
+            patch.set_facecolor(color)
+        
+        # Color the points
+        for flier, color in zip(box['fliers'], colors_list):
+            flier.set(marker='o', markerfacecolor=color, markeredgecolor=color, alpha=0.2)
+        
+        # Add labels and title
+        plt.ylabel(r"$\hat{\tau}$")
+        plt.xlabel("Model")
+        plt.title(f"ATE Distribution for Sample Size {sample_sizes[key]}")
+        
+        # Add a horizontal line for the true treatment effect
+        plt.axhline(te, color='black', linestyle='--', alpha=0.5)
+        #label = r"$\tau = " + str(te) + "$"
+        #plt.text(1, te, label, horizontalalignment='left')
+        
+        # Save the plot if a save name is provided
+        if save_name:
+            plt.savefig(save_name + "_" + str(key) + "_ate_boxplot.png")
+        
+        # Show the plot
+        plt.show()
+        
+        # Print summaries
+        print("Sample size:", sample_sizes[key], 
+                "\nATE_d:", '{:.2f}'.format(np.mean(sim_res['two_est'])), 
+                "\nATE_r:", '{:.2f}'.format(np.mean(sim_res['reg_est'])),
+                "\nATE_ml:",'{:.2f}'.format(np.mean(sim_res['ml_est'])),
+                "\nATE_s:", '{:.2f}'.format(np.mean(sim_res['s_est'])))
+        print("Var_d:", np.var(sim_res['two_est'], ddof=1), 
+                "\nVar_red_r:", '{:.2f}%'.format(100 * (1 - np.var(sim_res['reg_est'], ddof=1) / np.var(sim_res['two_est'], ddof=1))),
+                "\nVar_red_ml:", '{:.2f}%'.format(100 * (1 - np.var(sim_res['ml_est'], ddof=1) / np.var(sim_res['two_est'], ddof=1))),
+                "\nVar_red_s:", '{:.2f}%'.format(100 * (1 - np.var(sim_res['s_est'], ddof=1) / np.var(sim_res['two_est'], ddof=1))))
+        
+def plot_SE_boxplots(res, sample_sizes, save_name=""):
+    for key in res:
+        plt.figure(dpi=dpi)
+        sim_res = res[key]
+        
+        # Prepare data for boxplots
+        data = [sim_res['two_se'], sim_res['reg_se'], sim_res['ml_se'], sim_res['s_se']]
+        labels = [r"$SE(\hat{\tau}_d)$", r"$SE(\hat{\tau}_r)$", r"$SE(\hat{\tau}_{f})$", r"$SE(\hat{\tau}_{s})$"]
+        colors_list = [colors['two'], colors['reg'], colors['ml'], colors['mix']]
+        
+        # Create boxplots
+        box = plt.boxplot(data, patch_artist=True, labels=labels)
+        
+        # Color the boxplots
+        for patch, color in zip(box['boxes'], colors_list):
+            patch.set_facecolor(color)
+        
+        # Color the points
+        for flier, color in zip(box['fliers'], colors_list):
+            flier.set(marker='o', markerfacecolor=color, markeredgecolor=color, alpha=0.2)
+        
+        # Add labels and title
+        plt.ylabel(r"$SE(\hat{\tau})$")
+        plt.xlabel("Model")
+        plt.title(f"SE Distribution for Sample Size {sample_sizes[key]}")
+        
+        # Add lines representing the true standard deviation of ATEs spanning the entire x-axis
+        std_values = [np.std(sim_res['two_est']), np.std(sim_res['reg_est']), np.std(sim_res['ml_est']), np.std(sim_res['s_est'])]
+        
+        position = [0,0.25,0.5,0.75]
+        for std, color, pos in zip(std_values, colors_list, position):
+            plt.axhline(std, color=color, xmin = pos + 0.02, xmax = pos + 0.23, linestyle='--', alpha=0.8)
+
+        
+        # Save the plot if a save name is provided
+        if save_name:
+            plt.savefig(save_name + "_" + str(key) + "_se_boxplot.png")
+        
+        # Show the plot
+        plt.show()
