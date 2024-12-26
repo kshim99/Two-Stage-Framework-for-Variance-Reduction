@@ -1,166 +1,167 @@
-from helper_funcs import *
+import numpy as np
+import pandas as pd
 import statsmodels.api as sm
 
-def time_series_base(base_data, pre_exp_data, save_name = ""):
-    # plot pre-experiment data 
-    plt.plot(pre_exp_data['x_pre'], pre_exp_data['y_pre'], color = 'black', linewidth=0.5, label='Pre-Experiment Data')
-    plt.plot(pre_exp_data['x_pre'], pre_exp_data['pre_fit'], color='purple', linestyle ='--', linewidth = 0.5, label='Fitted Model')
-    # plot the test data before treatment assignment
-    plt.plot(base_data['x'], base_data['y'], 'o', color = 'black', label='In-Experiment Data')
-    plt.plot(base_data['x'], base_data['y'], color = 'black', ls = '-', linewidth = 0.5)
-    # add labels
-    plt.xlabel("Time")
-    plt.ylabel("Log(Pageview)")
-    plt.legend()
-    if save_name:
-        plt.savefig(save_name + ".png")
-    plt.show()
+
+# helper functions
+# note that I never need the date directly in any of the methods
+# I can just make prediction for all test observations, and keep track of their indices for control and treatment data
+# assume all the data frames passed in here do not contain dates, but converted to integers, and maintaining same order as original data
+
+# randomly generate control and treated data for a given test data, treatment effect and sample size
+def generate_exp_data(test_df, te, n):
+    test_len = len(test_df)
+    treatment_idx = np.random.choice(test_len, n, replace=True)
+    control_idx = np.random.choice(test_len, n, replace=True)
+    
+    treatment_df = test_df.iloc[treatment_idx].copy()
+    control_df = test_df.iloc[control_idx].copy()
+    
+    treatment_df['y'] += te  # Apply treatment effect
+    
+    return control_df, control_idx, treatment_df, treatment_idx
+
+# pre-processing data for the traffic data
+# remove the datetime stamp, and convert to integer
+# should be used with the entire test data before splitting to control and treatment
+def traffic_preprocess(df):
+    df['x1'] = (df['x'] - min(df['x'])).dt.days
+    return df.drop(columns=['x'])
+
+# helper for checking whether something is a scalar or a matrix, and convert a scalar to a 1x1 matrix
+def to_matrix(x):
+    if np.isscalar(x):
+        return np.array([[x]])  # Scalar to 1x1 matrix
+    if x.ndim == 1:
+        return np.reshape(x, (-1, 1))  # 1D array to column vector
+    return np.array(x)  # 2D array stays as it is
 
 
-def time_series_instance(exp_data, base_data, pre_exp_data, te, save_name = "", model = {}):
-    # plot pre-experiment data and in-experiment data
-    plt.plot(pre_exp_data['x_pre'], pre_exp_data['y_pre'], color = 'black', linewidth=0.5, label='Pre-Experiment Data')
-    plt.plot(pre_exp_data['x_pre'], pre_exp_data['pre_fit'], color='purple', linestyle ='--', linewidth = 0.5, label='Fitted Model')
-    plt.plot(exp_data['control_x'], exp_data['control_y'], 'o', color = control_col, label = 'Control Outcome', alpha = strong_alpha)
-    plt.plot(exp_data['treat_x'], exp_data['treat_y'], 'o', color = treat_col, label = 'Treatment Outcome', alpha = strong_alpha)
-    if not model: # if not dealing with particular model, plot the true test data with treatment effect applied
-        plt.plot(base_data['x'], base_data['y'], color = control_col, ls = '-', linewidth = 0.5)
-        plt.plot(base_data['x'], base_data['y'] + te, color = treat_col, ls = '-', linewidth = 0.5)
+# calculate the average treatment effect using constant method
+def calculate_ate(control_df, treatment_df):
 
-    else: # otherwise, plot the counterfactual estimates
-        n = len(exp_data['treat_y'])
-        alpha_1 = model['alpha_1']
-        alpha_0 = model['alpha_0']
-        mod = model['mod']
-        # create a copy of exp data where we replace date x with numeric x
-        temp_exp_data = exp_data.copy()
-        temp_exp_data['control_x'] = temp_exp_data['control_x_num']
-        temp_exp_data['treat_x'] = temp_exp_data['treat_x_num']
-        cf_dict = gen_counter_data(base_data['x_num_range'], temp_exp_data, mod, alpha_1, alpha_0)
-        # delete temp_exp_data after usage
-        del temp_exp_data
-        control_mod = cf_dict['control_mod']
-        treat_mod = cf_dict['treat_mod']
-        control_cfs = cf_dict['control_cfs']
-        treat_cfs = cf_dict['treat_cfs']
-        x = base_data['x']
-        # if plotting counterfactual estimates, add them in with hollow circles. generate lines for counterfactual models
-        plt.plot(exp_data['control_x'], control_cfs, 'o',fillstyle='none',color = treat_col,label='Est. Treatment Outcome',alpha=strong_alpha)
-        plt.plot(exp_data['treat_x'], treat_cfs, 'o',fillstyle='none',color=control_col,label='Est. Control Outcome',alpha=strong_alpha)
-        plt.plot(x, control_mod, linestyle='--', color=control_col, alpha = strong_alpha)
-        plt.plot(x, treat_mod, linestyle='--', color=treat_col, alpha = strong_alpha)
+    # calculate the average treatment effect and standard error
+    ate = treatment_df['y'].mean() - control_df['y'].mean()
+    se = np.sqrt(control_df['y'].var()/len(control_df) + treatment_df['y'].var()/len(treatment_df))
 
-        # compute ATE and SE
-        ATE = np.mean(np.append(exp_data['treat_y'] - treat_cfs, control_cfs - exp_data['control_y']))
-        SE = (np.var(exp_data['treat_y'] - treat_cfs, ddof = 1)/n + np.var(exp_data['control_y'] - control_cfs, ddof = 1)/n)**0.5
+    # return results
+    return ate, se
+    
+# calculate the average treatment effect using regression method
+def calculate_ate_reg(control_df, treatment_df):
 
-    # add labels
-    plt.xlabel("Time")
-    plt.ylabel("Log(Pageview)")
-    plt.legend()
-    if save_name:
-        plt.savefig(save_name + ".png")
-    plt.show()
+    # split data into outcomes and covariates 
+    y_1 = to_matrix(treatment_df['y'])
+    y_0 = to_matrix(control_df['y'])
+    x_0 = to_matrix(control_df.drop(columns = ['y']))
+    x_1 = to_matrix(treatment_df.drop(columns = ['y']))
 
-    if model:
-        print("ATE: ", ATE, ", SE: ", SE)
+    # calculate the beta coefficients
+    treatxvar = x_1.T @ x_1
+    controlxvar = x_0.T @ x_0
+    treatxcov = x_1.T @ y_1
+    controlxcov = x_0.T @ y_0
+    beta = np.linalg.inv(treatxvar + controlxvar) @ (treatxcov + controlxcov)
+    
+    # calculate the average treatment effect and standard error
+    xbar_1 = to_matrix(np.mean(x_1, axis=0)) # np.mean reduces the dimension so we need to turn it back to matrix
+    xbar_0 = to_matrix(np.mean(x_0, axis=0))
+    alpha_1 = np.mean(y_1) - xbar_1.T @ beta
+    alpha_0 = np.mean(y_0) - xbar_0.T @ beta
+    reg_est = alpha_1 - alpha_0
+    reg_se = (np.var(y_1 - x_1 @ beta, ddof=1)/len(treatment_df) + 
+              np.var(y_0 - x_0 @ beta, ddof=1)/len(control_df))**0.5 # no need to transpose x. x is n x p, beta is p x 1
+    
+    # return results - reg_est is in matrix form, so need to extract the scalar
+    return reg_est[0][0], reg_se
 
-def quartic_secondary_est(exp_data, pre_exp_model):
-    # ml with secondary quartic adjustment
-    control_r = exp_data['control_y'] - pre_exp_model(exp_data['control_x'])
-    treat_r = exp_data['treat_y'] - pre_exp_model(exp_data['treat_x'])
+# calculate the average treatment effect using prediction method
+def calculate_ate_pred(control_df, treatment_df, preds, control_idx, treatment_idx):
+    y_1 = treatment_df['y']
+    y_0 = control_df['y']
+    # get prediction for the instance of control and treatment data
+    control_pred = preds[control_idx]
+    treatment_pred = preds[treatment_idx]
 
-    # set up input matrices X and y
-    x_s = np.concatenate((exp_data['treat_x'], exp_data['control_x']))
-    n = len(exp_data['treat_y'])
-    treat_indicator = np.concatenate((np.ones(n), np.zeros(n)))
-    X_mat = np.column_stack((np.ones(2*n), treat_indicator, x_s, x_s**2, x_s**3, x_s**4))
-    y_vec = np.concatenate((treat_r, control_r))
-    model = sm.OLS(y_vec, X_mat)
-    results = model.fit()
-    params = results.params
+    # calculate the average treatment effect and standard error
+    ate = np.mean(y_1-treatment_pred) - np.mean(y_0-control_pred)
+    se = (np.var(y_1 - treatment_pred)/len(treatment_df) + 
+          np.var(y_0 - control_pred)/len(control_df))**0.5
+    
+    # return results
+    return ate, se
 
-    def quartic_mod(x):
-        return  pre_exp_model(x) + params[0] + x * params[2] + x**2 * params[3] + x**3 * params[4] + x**4 * params[5]
+#calculate the average treatment effect using secondary adjustment method
+def calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_idx):
+    
+    # get the remainder outcome after removing the prediction
+    control_pred = preds[control_idx]
+    treatment_pred = preds[treatment_idx]
+    y_1 = to_matrix(treatment_df['y'] - treatment_pred)
+    y_0 = to_matrix(control_df['y'] - control_pred)
 
-    q_est = np.mean(exp_data['treat_y'] - quartic_mod(exp_data['treat_x'])) - np.mean(exp_data['control_y'] - quartic_mod(exp_data['control_x']))
-    q_se = (np.var(exp_data['treat_y'] - quartic_mod(exp_data['treat_x']), ddof=1)/n +
-            np.var(exp_data['control_y'] - quartic_mod(exp_data['control_x']),ddof=1)/n)**0.5
-    del x_s, n, treat_indicator, X_mat, y_vec, model, results, params, control_r, treat_r
+    # get covariates
+    x_0 = to_matrix(control_df.drop(columns = ['y']))
+    x_1 = to_matrix(treatment_df.drop(columns = ['y']))
 
-    return [q_est, q_se]
-
-def gen_distribution_q(base_data, pre_exp_model, sample_sizes, sim_num, te):
-    # simulating multiple experiments for all 4 models
-    # begin simulating experiments
-    res = {}
-    x = base_data['x']
-    y = base_data['y']
-    for key in sample_sizes:
-        temp = []
-        n = sample_sizes[key]
-        for _ in range(sim_num):
-            exp_data = gen_exp_data(x,y,n,te)
-            temp.append(np.concatenate([const_est(exp_data), 
-                                        regress_est(exp_data), 
-                                        flex_ml_est(exp_data, pre_exp_model), 
-                                        secondary_est(exp_data, pre_exp_model),
-                                        quartic_secondary_est(exp_data,pre_exp_model)]))
-        res[key] = pd.DataFrame(temp, columns = ['two_est','two_se',
-                                                 'reg_est','reg_se',
-                                                 'ml_est','ml_se',
-                                                 's_est','s_se',
-                                                 'q_est','q_se']) 
-        del temp
-    # return the result which is a dictionary of dataframes
-    return res
-
-def plot_ATE_distribution_q(res, te, sample_sizes, save_name = ""):
-    # modified for quartic secondary adjustment
-    for key in res:
-        plt.figure(dpi = dpi)
-        sim_res = res[key]
-        # use this to first determine overall bin range
-        bins_max = max(max(sim_res['s_est']),max(sim_res['q_est']))
-        bins_min = min(min(sim_res['s_est']),min(sim_res['q_est']))
-        bins_freq = 100
-        bins_range = np.arange(bins_min, bins_max, (bins_max - bins_min)/bins_freq)
-        # plot the estimates
-        plt.hist(sim_res['s_est'], bins = bins_range, color = colors['mix'], label=r"$\hat{\tau}_{s}$",alpha=0.5)
-        plt.hist(sim_res['q_est'], bins = bins_range, color = colors['quad'], label=r"$\hat{\tau}_{q}$",alpha=0.5)
-
-        # add labels
-        label = r"$\tau = " + str(te) + "$"
-        top_loc = plt.gca().get_ylim()[1]
-        plt.text(te, top_loc, label, verticalalignment='top')
-        plt.axvline(te, color = 'black', linestyle='-',alpha=0.5)
-        plt.ylabel("Frequency")
-        plt.xlabel(r"$\hat{\tau}$")
-        plt.legend(loc=1)
-        if save_name:
-            plt.savefig(save_name + "_" + str(key) + "_ate.png")
-        plt.show()
-        print("Sample size:",sample_sizes[key])
+    # calculate the beta coefficients
+    treatxvar = x_1.T @ x_1
+    controlxvar = x_0.T @ x_0
+    treatxcov = x_1.T @ y_1
+    controlxcov = x_0.T @ y_0
+    beta = np.linalg.inv(treatxvar + controlxvar) @ (treatxcov + controlxcov)
+    
+    # calculate the average treatment effect and standard error
+    xbar_1 = to_matrix(np.mean(x_1, axis=0)) # np.mean reduces the dimension so we need to turn it back to matrix
+    xbar_0 = to_matrix(np.mean(x_0, axis=0))
+    alpha_1 = np.mean(y_1) - xbar_1.T @ beta
+    alpha_0 = np.mean(y_0) - xbar_0.T @ beta
+    reg_est = alpha_1 - alpha_0
+    reg_se = (np.var(y_1 - x_1 @ beta, ddof=1)/len(treatment_df) + 
+              np.var(y_0 - x_0 @ beta, ddof=1)/len(control_df))**0.5 # no need to transpose x. x is n x p, beta is p x 1
+    
+    # return results - reg_est is in matrix form, so need to extract the scalar
+    return reg_est[0][0], reg_se
 
 
-def plot_SE_distribution_q(res, save_name = ""):
-    for key in res:
-        plt.figure(dpi=dpi)
-        sim_res = res[key]
-        # use this to first determine overall bin range
-        bins_max = max(max(sim_res['s_se']),max(sim_res['q_se']))
-        bins_min = min(min(sim_res['s_se']),min(sim_res['q_se']))
-        bins_freq = 100
-        bins_range = np.arange(bins_min, bins_max, (bins_max - bins_min)/bins_freq)
-        # plot the SE estimates
-        plt.hist(sim_res['s_se'], bins = bins_range, color = colors['mix'], label=r"$SE(\hat{\tau}_{s})$",alpha=0.5)
-        plt.hist(sim_res['q_se'], bins = bins_range, color = colors['quad'], label=r"$SE(\hat{\tau}_{q})$",alpha=0.5)
-        plt.axvline(np.std(sim_res['s_est']), color = colors['mix'], linestyle='--',alpha=0.5)
-        plt.axvline(np.std(sim_res['q_est']), color = colors['quad'], linestyle='--',alpha=0.5)
-        # add labels
-        plt.ylabel("Frequency")
-        plt.xlabel(r"$SE(\hat{\tau})$")
-        plt.legend(loc=1)
-        if save_name:
-            plt.savefig(save_name + "_" + str(key) + "_se.png")
-        plt.show()
+    
+    
+# tests for the helper functions----------------------------------------------------------------------------------------------
+
+# read data
+cal_data = pd.read_excel('../data/CalTransit_Dataset/pems_output.xlsx')
+cal_data.rename({"Time": "x", "# Incidents": "y"}, axis=1, inplace=True)
+# split to training and test data 
+train_df = cal_data[cal_data['x'] < '2020-03-19'].reset_index(drop=True)
+test_df = cal_data[cal_data['x']>='2020-03-19'].reset_index(drop=True)
+test_df['x1'] = (test_df['x'] - min(test_df['x'])).dt.days
+
+# fit a predictive model
+opt_model = sm.tsa.statespace.SARIMAX(train_df['y'], order = (1, 0, 1), seasonal_order = (0, 1, 1, 7))
+preds = opt_model.fit(disp=False).get_prediction(start = len(train_df), end = len(train_df) + len(test_df) - 1).predicted_mean.reset_index(drop=True)   
+
+# generate control and treatment data
+te = 10
+n = 1000
+control_df, control_idx, treatment_df, treatment_idx = generate_exp_data(test_df, te, n)
+# drop dates when inputting to calculate functions
+control_df = control_df.drop(columns=['x'])
+treatment_df = treatment_df.drop(columns=['x'])
+
+# test calculate_ate
+ate, se = calculate_ate(control_df, treatment_df)
+true_ate = treatment_df['y'].mean() - control_df['y'].mean()
+true_se = np.sqrt(control_df['y'].var()/len(control_df) + treatment_df['y'].var()/len(treatment_df))
+print(ate, se)
+
+# test calculate_ate_reg
+ate, se = calculate_ate_reg(control_df, treatment_df)
+print(ate, se)
+
+# test calculate_ate_pred
+ate, se = calculate_ate_pred(control_df, treatment_df, preds, control_idx, treatment_idx)
+print(ate, se)
+
+# test calculate_ate_sec
+ate, se = calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_idx)
+print(ate, se)
