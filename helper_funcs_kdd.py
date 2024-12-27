@@ -14,8 +14,8 @@ def generate_exp_data(test_df, te, n):
     treatment_idx = np.random.choice(test_len, n, replace=True)
     control_idx = np.random.choice(test_len, n, replace=True)
     
-    treatment_df = test_df.iloc[treatment_idx].copy()
-    control_df = test_df.iloc[control_idx].copy()
+    treatment_df = test_df.iloc[treatment_idx].copy().reset_index(drop=True)
+    control_df = test_df.iloc[control_idx].copy().reset_index(drop=True)
     
     treatment_df['y'] += te  # Apply treatment effect
     
@@ -56,11 +56,17 @@ def calculate_ate_reg(control_df, treatment_df):
     x_0 = to_matrix(control_df.drop(columns = ['y']))
     x_1 = to_matrix(treatment_df.drop(columns = ['y']))
 
+    # centered outcome and covariates for parameter estimation
+    yc_1 = y_1 - np.mean(y_1)
+    yc_0 = y_0 - np.mean(y_0)
+    xc_1 = x_1 - np.mean(x_1, axis=0)
+    xc_0 = x_0 - np.mean(x_0, axis=0)
+
     # calculate the beta coefficients
-    treatxvar = x_1.T @ x_1
-    controlxvar = x_0.T @ x_0
-    treatxcov = x_1.T @ y_1
-    controlxcov = x_0.T @ y_0
+    treatxvar = xc_1.T @ xc_1
+    controlxvar = xc_0.T @ xc_0
+    treatxcov = xc_1.T @ yc_1
+    controlxcov = xc_0.T @ yc_0
     beta = np.linalg.inv(treatxvar + controlxvar) @ (treatxcov + controlxcov)
     
     # calculate the average treatment effect and standard error
@@ -80,8 +86,8 @@ def calculate_ate_pred(control_df, treatment_df, preds, control_idx, treatment_i
     y_1 = treatment_df['y']
     y_0 = control_df['y']
     # get prediction for the instance of control and treatment data
-    control_pred = preds[control_idx]
-    treatment_pred = preds[treatment_idx]
+    control_pred = preds[control_idx].reset_index(drop=True)
+    treatment_pred = preds[treatment_idx].reset_index(drop=True)
 
     # calculate the average treatment effect and standard error
     ate = np.mean(y_1-treatment_pred) - np.mean(y_0-control_pred)
@@ -95,8 +101,8 @@ def calculate_ate_pred(control_df, treatment_df, preds, control_idx, treatment_i
 def calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_idx):
     
     # get the remainder outcome after removing the prediction
-    control_pred = preds[control_idx]
-    treatment_pred = preds[treatment_idx]
+    control_pred = preds[control_idx].reset_index(drop=True)
+    treatment_pred = preds[treatment_idx].reset_index(drop=True)
     y_1 = to_matrix(treatment_df['y'] - treatment_pred)
     y_0 = to_matrix(control_df['y'] - control_pred)
 
@@ -104,11 +110,17 @@ def calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_id
     x_0 = to_matrix(control_df.drop(columns = ['y']))
     x_1 = to_matrix(treatment_df.drop(columns = ['y']))
 
+    # centered outcome and covariates for beta estimation
+    yc_1 = y_1 - np.mean(y_1)
+    yc_0 = y_0 - np.mean(y_0)
+    xc_1 = x_1 - np.mean(x_1, axis=0)
+    xc_0 = x_0 - np.mean(x_0, axis=0)
+
     # calculate the beta coefficients
-    treatxvar = x_1.T @ x_1
-    controlxvar = x_0.T @ x_0
-    treatxcov = x_1.T @ y_1
-    controlxcov = x_0.T @ y_0
+    treatxvar = xc_1.T @ xc_1
+    controlxvar = xc_0.T @ xc_0
+    treatxcov = xc_1.T @ yc_1
+    controlxcov = xc_0.T @ yc_0
     beta = np.linalg.inv(treatxvar + controlxvar) @ (treatxcov + controlxcov)
     
     # calculate the average treatment effect and standard error
@@ -128,7 +140,8 @@ def calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_id
     
 # tests for the helper functions----------------------------------------------------------------------------------------------
 
-# read data
+
+'''# read data
 cal_data = pd.read_excel('../data/CalTransit_Dataset/pems_output.xlsx')
 cal_data.rename({"Time": "x", "# Incidents": "y"}, axis=1, inplace=True)
 # split to training and test data 
@@ -142,7 +155,7 @@ preds = opt_model.fit(disp=False).get_prediction(start = len(train_df), end = le
 
 # generate control and treatment data
 te = 10
-n = 1000
+n = 100
 control_df, control_idx, treatment_df, treatment_idx = generate_exp_data(test_df, te, n)
 # drop dates when inputting to calculate functions
 control_df = control_df.drop(columns=['x'])
@@ -164,4 +177,4 @@ print(ate, se)
 
 # test calculate_ate_sec
 ate, se = calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_idx)
-print(ate, se)
+print(ate, se)'''
