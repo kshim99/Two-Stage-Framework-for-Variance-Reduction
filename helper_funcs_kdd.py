@@ -49,25 +49,38 @@ def calculate_ate(control_df, treatment_df):
     
 # calculate the average treatment effect using regression method
 def calculate_ate_reg(control_df, treatment_df):
+    # first remove any singular columns
+    # union of singular columns in control and treatment data
+    singular_cols = control_df.columns[control_df.nunique() == 1].union(treatment_df.columns[treatment_df.nunique() == 1])
+    control_df = control_df.drop(columns = singular_cols)
+    treatment_df = treatment_df.drop(columns = singular_cols)
+    #print("input dfs: ",control_df, treatment_df)
 
     # split data into outcomes and covariates 
     y_1 = to_matrix(treatment_df['y'])
     y_0 = to_matrix(control_df['y'])
     x_0 = to_matrix(control_df.drop(columns = ['y']))
     x_1 = to_matrix(treatment_df.drop(columns = ['y']))
+    #print("y_1: ", y_1, "y_0: ", y_0, "x_0: ", x_0, "x_1: ", x_1)
+    
+    # drop any singular columns
+
 
     # centered outcome and covariates for parameter estimation
-    yc_1 = y_1 - np.mean(y_1)
+    yc_1 = y_1 - np.mean(y_1) 
     yc_0 = y_0 - np.mean(y_0)
     xc_1 = x_1 - np.mean(x_1, axis=0)
     xc_0 = x_0 - np.mean(x_0, axis=0)
+    #print("yc_1: ", yc_1, "yc_0: ", yc_0, "xc_1: ", xc_1, "xc_0: ", xc_0)
 
     # calculate the beta coefficients
-    treatxvar = xc_1.T @ xc_1
-    controlxvar = xc_0.T @ xc_0
     treatxcov = xc_1.T @ yc_1
     controlxcov = xc_0.T @ yc_0
-    beta = np.linalg.inv(treatxvar + controlxvar) @ (treatxcov + controlxcov)
+    denom = (xc_1.T @ xc_1 + xc_0.T @ xc_0).astype(np.float64)
+    #print("treatxcov: ", treatxcov, "controlxcov: ", controlxcov, "denom: ", denom)
+    #print(treatxvar, controlxvar, type(treatxvar), type(controlxvar))
+    #print(denom, type(denom))
+    beta = np.linalg.inv(denom) @ (treatxcov + controlxcov)
     
     # calculate the average treatment effect and standard error
     xbar_1 = to_matrix(np.mean(x_1, axis=0)) # np.mean reduces the dimension so we need to turn it back to matrix
@@ -99,7 +112,12 @@ def calculate_ate_pred(control_df, treatment_df, preds, control_idx, treatment_i
 
 #calculate the average treatment effect using secondary adjustment method
 def calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_idx):
-    
+    # first remove any singular columns
+    # union of singular columns in control and treatment data
+    singular_cols = control_df.columns[control_df.nunique() == 1].union(treatment_df.columns[treatment_df.nunique() == 1])
+    control_df = control_df.drop(columns = singular_cols)
+    treatment_df = treatment_df.drop(columns = singular_cols)
+
     # get the remainder outcome after removing the prediction
     control_pred = preds[control_idx].reset_index(drop=True)
     treatment_pred = preds[treatment_idx].reset_index(drop=True)
@@ -110,18 +128,19 @@ def calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_id
     x_0 = to_matrix(control_df.drop(columns = ['y']))
     x_1 = to_matrix(treatment_df.drop(columns = ['y']))
 
-    # centered outcome and covariates for beta estimation
-    yc_1 = y_1 - np.mean(y_1)
+    # centered outcome and covariates for parameter estimation
+    yc_1 = y_1 - np.mean(y_1) 
     yc_0 = y_0 - np.mean(y_0)
     xc_1 = x_1 - np.mean(x_1, axis=0)
     xc_0 = x_0 - np.mean(x_0, axis=0)
 
     # calculate the beta coefficients
-    treatxvar = xc_1.T @ xc_1
-    controlxvar = xc_0.T @ xc_0
     treatxcov = xc_1.T @ yc_1
     controlxcov = xc_0.T @ yc_0
-    beta = np.linalg.inv(treatxvar + controlxvar) @ (treatxcov + controlxcov)
+    denom = (xc_1.T @ xc_1 + xc_0.T @ xc_0).astype(np.float64)
+    #print(treatxvar, controlxvar, type(treatxvar), type(controlxvar))
+    #print(denom, type(denom))
+    beta = np.linalg.inv(denom) @ (treatxcov + controlxcov)
     
     # calculate the average treatment effect and standard error
     xbar_1 = to_matrix(np.mean(x_1, axis=0)) # np.mean reduces the dimension so we need to turn it back to matrix
@@ -135,7 +154,13 @@ def calculate_ate_sec(control_df, treatment_df, preds, control_idx, treatment_id
     # return results - reg_est is in matrix form, so need to extract the scalar
     return reg_est[0][0], reg_se
 
-
+def housing_preprocess(df):
+    df = pd.get_dummies(df, columns = ['foundation', 'secured'])
+    # split the data into training and testing
+    # split date to year and time for both train and test
+    df['year'] = df['shipmonth'].dt.year
+    df['month'] = df['shipmonth'].dt.month
+    return df.drop(columns=['shipmonth'])
     
     
 # tests for the helper functions----------------------------------------------------------------------------------------------
