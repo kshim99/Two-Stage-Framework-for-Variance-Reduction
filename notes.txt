@@ -1,0 +1,9 @@
+- working on housing simulation
+- problem with one of the features: secured
+    - some value of secured is very sparse, so when randomly sampled, this results in a feature (secured = 3) being all single value, which results in a non-singular var/covar matrix
+    - maybe choose a different feature? 
+    - can group rare level with another level
+    - dont use simple lienar but use ridge regression? 
+    - or check columns that are singular and remove (easy solution?)
+solution: trouble came from not dropping the reference column (drop_first = True) when dummy-ing the categorical variables. 
+set this True, and ensure datatype is not object but npfloat, and drop any columns with a single level from both treat and control drop_first
